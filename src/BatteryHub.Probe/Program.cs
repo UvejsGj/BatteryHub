@@ -11,6 +11,10 @@ internal static class Program
         Commands:
           hid [--vid XXXX] [--pid XXXX]   List HID devices with VID, PID, top-level usage
                                           and report lengths. VID and PID are hex.
+          sony [--no-switch]              Read every DualShock 4 and DualSense once: raw battery
+                                          report, decoded reading, and a fixture block to paste.
+                                          --no-switch leaves Bluetooth pads in their current
+                                          report mode instead of requesting full reports.
         """;
 
     private static int Main(string[] args)
@@ -33,6 +37,8 @@ internal static class Program
             {
                 case "hid":
                     return HidCommand.Run(args[1..]);
+                case "sony":
+                    return SonyCommand.Run(args[1..]);
                 default:
                     Console.Error.WriteLine($"Unknown command '{args[0]}'.");
                     Console.Error.WriteLine(Usage);
@@ -47,10 +53,12 @@ internal static class Program
         }
     }
 
+    internal static string Version { get; } =
+        typeof(Program).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "?";
+
     internal static void PrintHeader()
     {
-        var version = typeof(Program).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
-        Console.WriteLine($"BatteryHub.Probe {version} | {RuntimeInformation.OSDescription} | {RuntimeInformation.FrameworkDescription}");
+        Console.WriteLine($"BatteryHub.Probe {Version} | {RuntimeInformation.OSDescription} | {RuntimeInformation.FrameworkDescription}");
     }
 }
 

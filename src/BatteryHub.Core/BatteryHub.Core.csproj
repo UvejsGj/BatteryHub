@@ -2,6 +2,13 @@
 
   <ItemGroup>
     <PackageReference Include="HidSharp" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="System.IO.Hashing" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="BatteryHub.Probe" />
+    <InternalsVisibleTo Include="BatteryHub.Tests" />
   </ItemGroup>
 
 </Project>

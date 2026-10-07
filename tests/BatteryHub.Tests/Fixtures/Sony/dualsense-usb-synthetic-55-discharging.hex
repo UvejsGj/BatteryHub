@@ -1,0 +1,9 @@
+# pad: DualSense
+# product-id: 0CE6
+# connection: USB
+# source: synthetic, built from the hid-playstation.c layout; not captured from hardware
+# expect: 55% Discharging
+01 80 80 80 80 00 00 00 08 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+00 00 00 00 00 05 00 00 00 00 00 00 00 00 00 00

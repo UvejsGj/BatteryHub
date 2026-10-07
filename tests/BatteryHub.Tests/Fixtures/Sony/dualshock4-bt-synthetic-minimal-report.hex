@@ -1,0 +1,7 @@
+# pad: DualShock 4
+# product-id: 05C4
+# connection: Bluetooth
+# source: synthetic, built from the hid-playstation.c layout; not captured from hardware
+# note: 10-byte minimal report sent before the switch to 0x11; no battery data
+# expect: reject
+01 80 80 80 80 08 00 00 00 00

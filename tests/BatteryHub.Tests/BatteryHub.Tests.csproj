@@ -15,7 +15,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Include="Fixtures\**\*.hex;Fixtures\**\*.md" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\BatteryHub.Core\BatteryHub.Core.csproj" />
+    <ProjectReference Include="..\..\src\BatteryHub.Probe\BatteryHub.Probe.csproj" />
   </ItemGroup>
 
 </Project>

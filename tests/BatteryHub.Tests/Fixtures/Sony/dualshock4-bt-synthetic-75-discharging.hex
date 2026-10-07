@@ -1,0 +1,10 @@
+# pad: DualShock 4
+# product-id: 05C4
+# connection: Bluetooth
+# source: synthetic, built from the hid-playstation.c layout; not captured from hardware
+# expect: 75% Discharging
+11 C0 00 80 80 80 80 08 00 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+07 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00 00 00 DB DF 56 5A
