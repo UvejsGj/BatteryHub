@@ -14,7 +14,7 @@ changes), needs no admin rights and installs no drivers.
 | 1. Scaffold: solution, Probe lists HID devices | Built, waiting for Probe output from real hardware |
 | 2. Sony pads | Built, waiting for Probe output from real hardware |
 | 3. Tray shell | Built, waiting to be tried on Windows |
-| 4. Xbox, generic BLE, HFP headsets | Not started |
+| 4. Xbox, generic BLE, HFP headsets | Built, waiting for Probe output from real hardware |
 | 5. AirPods | Not started |
 | 6. Polish | Not started |
 
@@ -30,7 +30,8 @@ Hardware on hand for testing: a DualShock 4 and AirPods Pro 3.
 | DualShock 4 | USB / Bluetooth | yes | untested, awaiting Probe output |
 | Sony wireless adapter | USB | no | untested |
 | DualSense, DualSense Edge | USB / Bluetooth | no | untested |
-| Xbox pads (XInput) | wireless | no | untested |
+| Xbox pads (XInput) | Xbox Wireless Adapter / USB | no | untested |
+| Xbox pads | Bluetooth | no | untested (shown through Windows' stored level) |
 | Generic BLE Battery Service | Bluetooth LE | no | untested |
 | Bluetooth headsets (HFP) | Bluetooth | no | untested |
 | AirPods | BLE advertisements | AirPods Pro 3 | untested |
@@ -99,6 +100,23 @@ dotnet run --project src/BatteryHub.Probe -- sony --no-switch
 the raw battery report, the decoded reading, and a fixture block that can be pasted into
 `tests/BatteryHub.Tests/Fixtures/Sony/` as a new test.
 
+```
+dotnet run --project src/BatteryHub.Probe -- xinput
+dotnet run --project src/BatteryHub.Probe -- ble
+dotnet run --project src/BatteryHub.Probe -- bt
+dotnet run --project src/BatteryHub.Probe -- bt --all
+dotnet run --project src/BatteryHub.Probe -- all
+```
+
+- `xinput`: for each of the four XInput slots, the raw battery type and level, the pad's
+  vendor and product ID, and the reading the app would show.
+- `ble`: paired Bluetooth LE devices, whether each is connected, and the Battery Service
+  read for the connected ones.
+- `bt`: paired Bluetooth devices with their connection state, the battery level Windows
+  stores for each headset (hands-free) and LE device node, and a raw dump of the Bluetooth
+  device nodes around them. `--all` dumps every Bluetooth device node.
+- `all`: every reader once, then the merged list the tray would show.
+
 ## Sony pads over Bluetooth
 
 Over Bluetooth a DualShock 4 or DualSense sends a minimal report with no battery data
@@ -123,6 +141,43 @@ Other things the Sony reader does that the protocol references taught it:
   are recognised from the Windows device tree, as DS4Windows does, and skipped.
 - A pad keeps one ID on USB and Bluetooth: its Bluetooth address, read from the serial
   number (Bluetooth) or a pairing feature report (USB).
+
+## Xbox pads, Bluetooth LE devices and headsets
+
+Three more readers run next to the Sony one. A device that more than one of them sees is
+shown once: readers that know a device's Bluetooth address key it as `bt-<address>`, and
+the best reading wins (a percentage over a coarse level over an error over "no data"; on a
+tie, the earlier reader in the order Sony, XInput, BLE, Windows' stored level).
+
+**Xbox pads (XInput, every 30 s).** XInput reports one of four levels (empty, low, medium,
+full), which are shown by name, never turned into a percentage. Wired pads and pads whose
+battery type XInput does not know are not listed. XInput gives no address, so these rows are keyed by slot
+(1-4). Pads connected over Bluetooth are skipped here, because XInput's battery data for them
+is unreliable; Windows' stored level shows them instead. Steam's virtual pad is skipped too.
+
+**Bluetooth LE Battery Service (every 5 min, and when a device connects).** Paired LE
+devices with the standard Battery Service are read, but only while they are already
+connected: BatteryHub never connects a device. A device that refuses access (Windows owns
+the battery service of most keyboards, mice and pads) or has no battery service is skipped
+quietly until it reconnects.
+
+**Windows' stored level (every 60 s).** Windows keeps a battery level for Bluetooth
+devices, the number Settings shows: classic headsets report it over the hands-free profile
+(HFP), and LE devices through their Battery Service. BatteryHub reads it from the device
+nodes and shows it only while Windows lists the device as connected, because Windows keeps
+the last value after a disconnect. The key holding it is undocumented; it is the one
+Windhawk and other battery tools use. Headsets often send it only when they connect, and
+classic Bluetooth carries no charging state. AirPods do not report through it (they get
+their own reader in milestone 5), so a connected pair shows "no data" until then.
+
+Where this differs from the plan:
+
+- The plan asked the BLE reader to subscribe to battery notifications where supported.
+  Subscribing writes the device's notification setting, which is stored on the device and
+  shared with Windows and every other app, so the reader polls instead.
+- The headset reader also covers LE devices, because Windows' stored level is the only
+  way to see keyboards, mice and Xbox pads whose battery service apps may not read.
+- XInput skips Bluetooth Xbox pads and Steam's virtual pad (see above).
 
 ## Protocol references
 

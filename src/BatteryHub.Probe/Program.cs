@@ -15,6 +15,15 @@ internal static class Program
                                           report, decoded reading, and a fixture block to paste.
                                           --no-switch leaves Bluetooth pads in their current
                                           report mode instead of requesting full reports.
+          xinput                          Xbox controllers through XInput: raw battery type and
+                                          level per slot, and the readings the app would show.
+          ble                             Paired Bluetooth LE devices: connection state and the
+                                          Battery Service read (connected devices only).
+          bt [--all]                      The battery level Windows stores for Bluetooth headsets
+                                          (hands-free) and LE devices, paired devices with their
+                                          connection state, and the raw device nodes. --all dumps
+                                          every Bluetooth device node.
+          all                             Every reader once, then the merged list the tray shows.
         """;
 
     private static int Main(string[] args)
@@ -39,6 +48,14 @@ internal static class Program
                     return HidCommand.Run(args[1..]);
                 case "sony":
                     return SonyCommand.Run(args[1..]);
+                case "xinput":
+                    return XInputCommand.Run(args[1..]);
+                case "ble":
+                    return BleCommand.Run(args[1..]);
+                case "bt":
+                    return BluetoothCommand.Run(args[1..]);
+                case "all":
+                    return AllCommand.Run(args[1..]);
                 default:
                     Console.Error.WriteLine($"Unknown command '{args[0]}'.");
                     Console.Error.WriteLine(Usage);

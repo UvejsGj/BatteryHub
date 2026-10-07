@@ -85,6 +85,12 @@ public class DeviceListPresenterTests
     }
 
     [Fact]
+    public void Wireless_connection_is_named()
+    {
+        Assert.Equal("Wireless", DeviceListPresenter.Row(Reading(coarse: CoarseLevel.Full, connection: ConnectionType.Wireless)).Details);
+    }
+
+    [Fact]
     public void Tooltip_lists_devices_and_charge_state()
     {
         string tip = DeviceListPresenter.ToolTip([Reading(85, ChargeState.Charging), Reading(40, name: "AirPods Pro 3")]);

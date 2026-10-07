@@ -91,13 +91,6 @@ internal static class DeviceTree
         }
     }
 
-    [StructLayout(LayoutKind.Sequential)]
-    private readonly struct DevPropKey(Guid formatId, uint propertyId)
-    {
-        public readonly Guid FormatId = formatId;
-        public readonly uint PropertyId = propertyId;
-    }
-
     [DllImport("cfgmgr32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
     private static extern uint CM_Get_Device_Interface_PropertyW(string deviceInterface, in DevPropKey propertyKey, out uint propertyType, byte[]? propertyBuffer, ref uint propertyBufferSize, uint flags);
 

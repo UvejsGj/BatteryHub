@@ -2,9 +2,12 @@ using System.Drawing;
 using System.Windows;
 using System.Windows.Threading;
 using BatteryHub.Core;
+using BatteryHub.Core.Ble;
+using BatteryHub.Core.BluetoothProperty;
 using BatteryHub.Core.Settings;
 using BatteryHub.Core.Sony;
 using BatteryHub.Core.Windows;
+using BatteryHub.Core.XInput;
 using H.NotifyIcon;
 
 namespace BatteryHub.App;
@@ -43,7 +46,16 @@ public partial class App : Application
         var sony = new SonyHidProvider(
             new SonyHidOptions { RequestFullBluetoothReports = settings.ReadBluetoothPlayStationControllers },
             new TraceLogger<SonyHidProvider>());
-        _monitor = new BatteryMonitor([sony], new TraceLogger<BatteryMonitor>());
+        // The order settles ties: for two equally good readings of one device, the earlier reader's is shown.
+        // The Probe's "all" command uses the same list.
+        _monitor = new BatteryMonitor(
+            [
+                sony,
+                new XInputProvider(new TraceLogger<XInputProvider>()),
+                new BleBatteryProvider(new TraceLogger<BleBatteryProvider>()),
+                new BluetoothPropertyProvider(),
+            ],
+            new TraceLogger<BatteryMonitor>());
         var startup = new StartupRegistration(new StartupRegistry(), Environment.ProcessPath ?? throw new InvalidOperationException("No process path."));
         var viewModel = new MainViewModel(_monitor, store, settings, sony, startup, _logger);
 

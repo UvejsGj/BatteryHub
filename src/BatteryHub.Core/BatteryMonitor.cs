@@ -227,23 +227,12 @@ public sealed class BatteryMonitor : IAsyncDisposable
         }
     }
 
-    // Providers in the order given; a device ID seen twice keeps the first provider's reading.
-    // Proper de-duplication across providers (one pad seen by HID and XInput) comes with those providers.
-    private List<BatteryReading> Merge()
-    {
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        var merged = new List<BatteryReading>();
-        foreach (var state in _providers)
-        {
-            foreach (var reading in state.Readings)
-            {
-                if (seen.Add(reading.DeviceId))
-                {
-                    merged.Add(reading);
-                }
-            }
-        }
+    private List<BatteryReading> Merge() => Combine(_providers.Select(p => p.Readings));
 
+    /// <summary>One reading per device, sorted by name. Earlier providers win ties.</summary>
+    internal static List<BatteryReading> Combine(IEnumerable<IReadOnlyList<BatteryReading>> readingsByProvider)
+    {
+        var merged = ReadingDeduplicator.Merge(readingsByProvider);
         merged.Sort((a, b) =>
         {
             int byName = string.Compare(a.Name, b.Name, StringComparison.CurrentCultureIgnoreCase);

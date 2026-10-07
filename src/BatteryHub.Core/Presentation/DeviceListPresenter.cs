@@ -64,6 +64,7 @@ public static class DeviceListPresenter
         ConnectionType.Usb => "USB",
         ConnectionType.Bluetooth => "Bluetooth",
         ConnectionType.Ble => "Bluetooth LE",
+        ConnectionType.Wireless => "Wireless",
         _ => "Unknown connection",
     };
 

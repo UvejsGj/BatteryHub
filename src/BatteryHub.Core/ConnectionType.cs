@@ -9,4 +9,7 @@ public enum ConnectionType
     Bluetooth,
     /// <summary>Bluetooth Low Energy.</summary>
     Ble,
+
+    /// <summary>Wireless, transport not known (XInput cannot tell the Xbox Wireless Adapter from Bluetooth).</summary>
+    Wireless,
 }
