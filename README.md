@@ -23,14 +23,17 @@ changes), needs no admin rights and installs no drivers.
 A reader counts as tested only once its Probe output has been captured on that hardware
 and added to the test fixtures. Everything else is built from the protocol references.
 
-| Device | Connection | Status |
-|---|---|---|
-| DualShock 4, Sony wireless adapter | USB / Bluetooth | untested |
-| DualSense, DualSense Edge | USB / Bluetooth | untested |
-| Xbox pads (XInput) | wireless | untested |
-| Generic BLE Battery Service | Bluetooth LE | untested |
-| Bluetooth headsets (HFP) | Bluetooth | untested |
-| AirPods | BLE advertisements | untested |
+Hardware on hand for testing: a DualShock 4 and AirPods Pro 3.
+
+| Device | Connection | Hardware on hand | Status |
+|---|---|---|---|
+| DualShock 4 | USB / Bluetooth | yes | untested, awaiting Probe output |
+| Sony wireless adapter | USB | no | untested |
+| DualSense, DualSense Edge | USB / Bluetooth | no | untested |
+| Xbox pads (XInput) | wireless | no | untested |
+| Generic BLE Battery Service | Bluetooth LE | no | untested |
+| Bluetooth headsets (HFP) | Bluetooth | no | untested |
+| AirPods | BLE advertisements | AirPods Pro 3 | untested |
 
 ## Layout
 
