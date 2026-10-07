@@ -1,0 +1,88 @@
+<UserControl x:Class="BatteryHub.App.DeviceFlyout"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:BatteryHub.App"
+             xmlns:core="clr-namespace:BatteryHub.Core.Presentation;assembly=BatteryHub.Core"
+             Width="320">
+    <UserControl.Resources>
+        <local:VisibleWhenConverter x:Key="VisibleWhen" />
+        <local:VisibleWhenConverter x:Key="HiddenWhen" Invert="True" />
+    </UserControl.Resources>
+
+    <Border Background="{DynamicResource FlyoutBackground}"
+            BorderBrush="{DynamicResource FlyoutBorder}"
+            BorderThickness="1"
+            CornerRadius="8"
+            Padding="14,12"
+            TextElement.Foreground="{DynamicResource FlyoutForeground}"
+            TextElement.FontFamily="Segoe UI Variable Text, Segoe UI">
+        <StackPanel>
+            <DockPanel LastChildFill="True">
+                <Button DockPanel.Dock="Right"
+                        Content="Refresh"
+                        Command="{Binding RefreshCommand}"
+                        Padding="10,2"
+                        Background="Transparent"
+                        Foreground="{DynamicResource FlyoutForeground}"
+                        BorderBrush="{DynamicResource FlyoutBorder}" />
+                <TextBlock Text="Batteries" FontSize="15" FontWeight="SemiBold" VerticalAlignment="Center" />
+            </DockPanel>
+
+            <ItemsControl ItemsSource="{Binding Rows}" Margin="0,6,0,0" Focusable="False">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate DataType="{x:Type core:DeviceRow}">
+                        <Grid Margin="0,8,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+
+                            <StackPanel>
+                                <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                <TextBlock Text="{Binding Details}" FontSize="11.5" Foreground="{DynamicResource FlyoutSecondary}" />
+                                <TextBlock Text="{Binding Problem}"
+                                           FontSize="11.5"
+                                           TextWrapping="Wrap"
+                                           Foreground="{DynamicResource FlyoutSecondary}"
+                                           Visibility="{Binding Problem, Converter={StaticResource VisibleWhen}}" />
+                            </StackPanel>
+
+                            <StackPanel Grid.Column="1" Margin="12,0,0,0" MinWidth="64">
+                                <TextBlock x:Name="Level" Text="{Binding Level}" FontSize="16" HorizontalAlignment="Right" />
+                                <Border Height="4"
+                                        Width="64"
+                                        Margin="0,4,0,0"
+                                        CornerRadius="2"
+                                        Background="{DynamicResource FlyoutTrack}"
+                                        HorizontalAlignment="Right"
+                                        Visibility="{Binding BarFraction, Converter={StaticResource VisibleWhen}}">
+                                    <Border x:Name="Bar"
+                                            HorizontalAlignment="Left"
+                                            CornerRadius="2"
+                                            Background="{DynamicResource FlyoutLevelBar}"
+                                            Width="{Binding BarFraction, Converter={x:Static local:FractionToWidth.Bar64}, TargetNullValue=0}" />
+                                </Border>
+                            </StackPanel>
+                        </Grid>
+                        <DataTemplate.Triggers>
+                            <DataTrigger Binding="{Binding IsLow}" Value="True">
+                                <Setter TargetName="Level" Property="Foreground" Value="{DynamicResource FlyoutLow}" />
+                                <Setter TargetName="Bar" Property="Background" Value="{DynamicResource FlyoutLow}" />
+                            </DataTrigger>
+                        </DataTemplate.Triggers>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+
+            <TextBlock Text="No controllers or headsets found."
+                       Margin="0,10,0,0"
+                       Foreground="{DynamicResource FlyoutSecondary}"
+                       Visibility="{Binding HasDevices, Converter={StaticResource HiddenWhen}}" />
+
+            <TextBlock Text="{Binding StatusLine}"
+                       Margin="0,12,0,0"
+                       FontSize="11"
+                       Foreground="{DynamicResource FlyoutSecondary}" />
+        </StackPanel>
+    </Border>
+</UserControl>

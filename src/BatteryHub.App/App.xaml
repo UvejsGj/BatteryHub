@@ -1,5 +1,35 @@
 <Application x:Class="BatteryHub.App.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:tb="http://www.hardcodet.net/taskbar"
+             xmlns:local="clr-namespace:BatteryHub.App"
              ShutdownMode="OnExplicitShutdown">
+    <Application.Resources>
+        <tb:TaskbarIcon x:Key="TrayIcon"
+                        ToolTipText="BatteryHub"
+                        NoLeftClickDelay="True"
+                        PopupActivation="LeftClick"
+                        MenuActivation="RightClick">
+            <tb:TaskbarIcon.TrayPopup>
+                <local:DeviceFlyout />
+            </tb:TaskbarIcon.TrayPopup>
+            <tb:TaskbarIcon.ContextMenu>
+                <ContextMenu>
+                    <MenuItem Header="_Refresh" Command="{Binding RefreshCommand}" />
+                    <Separator />
+                    <MenuItem Header="Start with _Windows"
+                              IsCheckable="False"
+                              IsChecked="{Binding StartWithWindows, Mode=OneWay}"
+                              Command="{Binding ToggleStartWithWindowsCommand}" />
+                    <MenuItem Header="Read _Bluetooth PlayStation controllers"
+                              IsCheckable="False"
+                              IsChecked="{Binding ReadBluetoothPlayStationControllers, Mode=OneWay}"
+                              Command="{Binding ToggleReadBluetoothCommand}"
+                              ToolTip="Switches Bluetooth DualShock 4 and DualSense controllers to the report mode that carries the battery level. Games that read the controller directly, without Steam Input, may stop seeing it until it reconnects." />
+                    <Separator />
+                    <MenuItem Header="E_xit" Command="{Binding ExitCommand}" />
+                </ContextMenu>
+            </tb:TaskbarIcon.ContextMenu>
+        </tb:TaskbarIcon>
+    </Application.Resources>
 </Application>

@@ -3,7 +3,14 @@
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <UseWPF>true</UseWPF>
+    <ApplicationIcon>Assets\BatteryHub.ico</ApplicationIcon>
+    <AssemblyName>BatteryHub</AssemblyName>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\BatteryHub.ico" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="H.NotifyIcon.Wpf" />

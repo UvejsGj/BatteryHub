@@ -43,7 +43,7 @@ public sealed class SonyHidProvider : IBatteryProvider
     // DeviceList.Changed fires several times while one pad connects; poll once things settle.
     private static readonly TimeSpan ChangeDebounce = TimeSpan.FromSeconds(1);
 
-    private readonly SonyHidOptions _options;
+    private volatile SonyHidOptions _options;
     private readonly ILogger _logger;
     private readonly TimeProvider _time;
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -63,6 +63,13 @@ public sealed class SonyHidProvider : IBatteryProvider
     }
 
     public string Name => ProviderName;
+
+    /// <summary>Takes effect from the next poll.</summary>
+    public SonyHidOptions Options
+    {
+        get => _options;
+        set => _options = value ?? throw new ArgumentNullException(nameof(value));
+    }
 
     public TimeSpan PollInterval { get; } = TimeSpan.FromSeconds(30);
 
@@ -153,10 +160,11 @@ public sealed class SonyHidProvider : IBatteryProvider
 
         using (stream)
         {
+            bool requestFull = _options.RequestFullBluetoothReports;
             var channel = new HidSharpChannel(device, stream);
-            var (id, source) = _ids.Resolve(path, model, connection, ReadSerial(device), channel, _options.RequestFullBluetoothReports);
-            var read = SonyPadSession.Read(channel, model, connection, _options.RequestFullBluetoothReports, _time, SonyPadSession.DefaultReadWindow);
-            var reading = SonyReadingMapper.FromRead(read, model, connection, id, _time.GetUtcNow(), _options.RequestFullBluetoothReports);
+            var (id, source) = _ids.Resolve(path, model, connection, ReadSerial(device), channel, requestFull);
+            var read = SonyPadSession.Read(channel, model, connection, requestFull, _time, SonyPadSession.DefaultReadWindow);
+            var reading = SonyReadingMapper.FromRead(read, model, connection, id, _time.GetUtcNow(), requestFull);
             return new(model, path, connection, false, id, source, reading, read, null);
         }
     }

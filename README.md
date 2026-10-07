@@ -13,7 +13,7 @@ changes), needs no admin rights and installs no drivers.
 |---|---|
 | 1. Scaffold: solution, Probe lists HID devices | Built, waiting for Probe output from real hardware |
 | 2. Sony pads | Built, waiting for Probe output from real hardware |
-| 3. Tray shell | Not started |
+| 3. Tray shell | Built, waiting to be tried on Windows |
 | 4. Xbox, generic BLE, HFP headsets | Not started |
 | 5. AirPods | Not started |
 | 6. Polish | Not started |
@@ -54,6 +54,31 @@ dotnet test
 
 Warnings are errors.
 
+## Tray app
+
+```
+dotnet run --project src/BatteryHub.App
+```
+
+BatteryHub runs in the notification area. Left-click the battery icon for the list of
+devices with their level and charge state; hovering shows the same as a tooltip.
+Right-click for:
+
+- **Refresh**: read every device now instead of waiting for the next poll.
+- **Start with Windows**: adds or removes BatteryHub in your user's Run key
+  (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`). No admin rights needed. If Task
+  Manager has disabled the entry, it shows as off.
+- **Read Bluetooth PlayStation controllers**: see "Sony pads over Bluetooth" below.
+- **Exit**.
+
+Only one copy runs per Windows session; starting it again opens the running copy's list.
+Settings live in `%AppData%\BatteryHub\settings.json`. If that file is not valid JSON it is
+renamed to `settings.json.bad` and defaults are used; if it cannot be read at all, defaults
+are used and the file is left as it is.
+
+Keyboard: Win+B, arrow to the battery icon, then Enter opens the list and the Menu key (or
+Shift+F10) opens the menu.
+
 ## Probe
 
 ```
@@ -84,8 +109,9 @@ minimal report, such as DirectInput games running without Steam Input, may stop 
 input from the pad until it reconnects. Steam and DS4Windows switch the pad the same way,
 so with either running nothing changes.
 
-`SonyHidOptions.RequestFullBluetoothReports` turns the read off; the pad then shows
-"no data" until another program switches it. `sony --no-switch` does the same in the Probe.
+The tray menu's **Read Bluetooth PlayStation controllers** turns the read off (it is on by
+default); the pad then shows "no data" until another program switches it. `sony --no-switch`
+does the same in the Probe.
 
 Other things the Sony reader does that the protocol references taught it:
 
