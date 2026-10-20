@@ -108,8 +108,9 @@ dotnet run --project src/BatteryHub.Probe -- bt --all
 dotnet run --project src/BatteryHub.Probe -- all
 ```
 
-- `xinput`: for each of the four XInput slots, the raw battery type and level, the pad's
-  vendor and product ID, and the reading the app would show.
+- `xinput`: for each of the four XInput slots, the raw battery type and level, what
+  XInput's capabilities call reports (vendor and product ID, flags), and the reading the
+  app would show. If a pad reports "empty", it reads again 11 s later, as the app would.
 - `ble`: paired Bluetooth LE devices, whether each is connected, and the Battery Service
   read for the connected ones.
 - `bt`: paired Bluetooth devices with their connection state, the battery level Windows
@@ -158,11 +159,12 @@ full), which are shown by name, never turned into a percentage. Wired pads and p
 battery type XInput does not know are not listed. XInput gives no address, so these rows
 are keyed by slot (1-4), which can change when pads reconnect. A pad that has just
 connected can report "empty" before its real level, so a first "empty" shows as "no data"
-until it holds for 10 seconds. XInput's battery data for pads on Bluetooth is unreliable:
-pads on Bluetooth LE (current firmware) are left to the Bluetooth readers, and pads on
-classic Bluetooth (older firmware) show "no data", because no reliable source for them has
-been found yet. Steam's virtual pad is skipped, since it stands in for a real pad. Asking
-XInput anything may make an Xbox 360 pad light its player quadrant, as any game does.
+until it holds for 10 seconds (after "low" it shows at once). XInput's battery data for
+pads on Bluetooth is unreliable: pads on Bluetooth LE (current firmware) are left to the
+Bluetooth readers, and pads on classic Bluetooth (older firmware) show "no data", because
+no reliable source for them has been found yet. Steam's virtual pad is skipped, since it
+stands in for a real pad. Asking XInput anything may make an Xbox 360 pad light its player
+quadrant, as any game does.
 
 **Bluetooth LE Battery Service (every 5 min, and when a device connects).** Paired LE
 devices with the standard Battery Service are read, but only while they are already
@@ -170,15 +172,16 @@ connected: BatteryHub never connects a device, and checks the link again right b
 read. A device that refuses access or has no battery service is skipped quietly until it
 reconnects; Windows' stored level still shows it if Windows has one.
 
-**Windows' stored level (every 60 s).** Windows keeps a battery level for Bluetooth
-devices, the number Settings shows: classic headsets report it over the hands-free profile
-(HFP), and LE devices through their Battery Service. BatteryHub reads it from the device
-nodes and shows it only while Windows lists the device as connected, because Windows keeps
-the last value after a disconnect. The key holding it is undocumented; it is the one
-Windhawk and other battery tools use. The value is whatever the device last sent; headsets
-often send it only when they connect, and classic Bluetooth carries no charging state.
-AirPods are not expected to report through it (they send their battery in their own
-format, which milestone 5 reads), so a connected pair shows "no data" until then.
+**Windows' stored level (every 60 s, and when a device connects or disconnects).** Windows
+keeps a battery level for Bluetooth devices, the number Settings shows: classic headsets
+report it over the hands-free profile (HFP), and LE devices through their Battery Service.
+BatteryHub reads it from the device nodes and shows it only while Windows lists the device
+as connected, because Windows keeps the last value after a disconnect. The key holding it
+is undocumented; it is the one Windhawk and other battery tools use. The value is whatever
+the device last sent; headsets often send it only when they connect, and classic Bluetooth
+carries no charging state. AirPods are not expected to report through it (they send their
+battery in their own format, which milestone 5 reads), so a connected pair shows "no data"
+until then.
 
 Where this differs from the plan:
 

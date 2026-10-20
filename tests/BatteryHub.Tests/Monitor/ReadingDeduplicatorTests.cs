@@ -65,6 +65,7 @@ public class ReadingDeduplicatorTests
     [InlineData("a0:ab:51:c0:ff:ee", 0xA0AB51C0FFEEUL)]
     [InlineData("A0-AB-51-C0-FF-EE", 0xA0AB51C0FFEEUL)]
     [InlineData("a0ab51c0ffee", 0xA0AB51C0FFEEUL)]
+    [InlineData(" a0:ab:51:c0:ff:ee ", 0xA0AB51C0FFEEUL)]
     public void Parses_windows_address_strings(string text, ulong expected)
     {
         Assert.True(BluetoothAddress.TryParse(text, out ulong address));
@@ -79,6 +80,7 @@ public class ReadingDeduplicatorTests
     [InlineData("g0:ab:51:c0:ff:ee")]
     [InlineData("+0ab51c0ffee")]
     [InlineData("00:00:00:00:00:00")] // the PC's own services
+    [InlineData("000000000000")]
     [InlineData("FFFFFFFFFFFF")] // broadcast, names no device
     public void Rejects_anything_that_is_not_a_bluetooth_address(string? text)
     {

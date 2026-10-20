@@ -1,9 +1,8 @@
-using System.Runtime.InteropServices;
+using BatteryHub.Core.Windows;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Windows.Devices.Bluetooth;
 using Windows.Devices.Bluetooth.GenericAttributeProfile;
-using Windows.Devices.Enumeration;
 using Windows.Storage.Streams;
 
 namespace BatteryHub.Core.Ble;
@@ -11,63 +10,43 @@ namespace BatteryHub.Core.Ble;
 /// <summary>Paired Bluetooth LE devices and their Battery Level, through WinRT.</summary>
 /// <remarks>
 /// Based on Microsoft's GATT client guidance and the BluetoothLE sample (microsoft/Windows-universal-samples):
-/// one DeviceWatcher over paired-device association endpoints keeps the device list and connection state current
+/// watchers over paired-device association endpoints keep the device list and connection state current
 /// (FindAllAsync on endpoints can take 10 s or more); a read re-checks the connection first, looks the service and
 /// characteristic up in Windows' cache (an uncached lookup would start a connection), reads the value from the
 /// device, and disposes every WinRT object so BatteryHub never keeps a link alive.
 /// </remarks>
 internal sealed class WinRtBleBatterySource : IBleBatterySource
 {
-    private const string AddressProperty = "System.Devices.Aep.DeviceAddress";
-    private const string ConnectedProperty = "System.Devices.Aep.IsConnected";
-    private const string AppearanceProperty = "System.Devices.Aep.Bluetooth.Le.Appearance";
-    private const string ContainerProperty = "System.Devices.Aep.ContainerId";
-
-    private static readonly TimeSpan EnumerationTimeout = TimeSpan.FromSeconds(15);
-
-    // Paired-device queries read Windows' records and answer in milliseconds.
-    private static readonly TimeSpan ClassicQueryTimeout = TimeSpan.FromSeconds(10);
-
     // An unreachable device times out after about 7 s per queued request.
     private static readonly TimeSpan ReadTimeout = TimeSpan.FromSeconds(10);
 
-    // A watcher that stops sooner than this after starting is restarted by the next scheduled poll, not at once.
-    private static readonly TimeSpan QuickStop = TimeSpan.FromSeconds(30);
+    private readonly PairedDeviceWatcher _lowEnergy;
 
-    private readonly ILogger _logger;
-    private readonly Lock _lock = new();
-    private readonly Dictionary<string, DeviceInformation> _devices = new(StringComparer.Ordinal); // under _lock
-    private TaskCompletionSource _enumerated = new(TaskCreationOptions.RunContinuationsAsynchronously); // under _lock; the current watcher's
-    private DeviceWatcher? _watcher; // under _lock
-    private long _watcherStartedAt; // under _lock; Environment.TickCount64
-    private bool _disposed; // under _lock
+    // The classic halves of dual-mode devices, so their LE readings can be keyed by the classic address.
+    private readonly PairedDeviceWatcher _classic;
 
     public WinRtBleBatterySource(ILogger? logger = null)
     {
-        _logger = logger ?? NullLogger.Instance;
+        var log = logger ?? NullLogger.Instance;
+        _lowEnergy = PairedDeviceWatcher.LowEnergy(log);
+        _classic = PairedDeviceWatcher.Classic(log);
+        _lowEnergy.Changed += OnLowEnergyChanged;
     }
 
     public event EventHandler? DevicesChanged;
 
     public async Task<IReadOnlyList<BleDeviceInfo>> ListPairedAsync(CancellationToken cancellationToken)
     {
-        var enumerated = EnsureWatcher();
-
-        // A watcher's first enumeration fills the list; later calls return immediately.
-        try
+        var lowEnergy = await _lowEnergy.ListAsync(cancellationToken).ConfigureAwait(false);
+        var classic = (await _classic.ListAsync(cancellationToken).ConfigureAwait(false))
+            .Select(d => (d.Address, d.ContainerId))
+            .ToList();
+        return lowEnergy.Select(d =>
         {
-            await enumerated.WaitAsync(EnumerationTimeout, cancellationToken).ConfigureAwait(false);
-        }
-        catch (TimeoutException)
-        {
-            _logger.LogInformation("Bluetooth LE enumeration has not finished; using the devices found so far");
-        }
-
-        var classic = await ListClassicAsync(cancellationToken).ConfigureAwait(false);
-        lock (_lock)
-        {
-            return _devices.Values.Select(info => ToInfo(info, classic)).OfType<BleDeviceInfo>().ToList();
-        }
+            ulong? classicAddress = BluetoothIdentity.ClassicAddressInContainer(d.ContainerId, classic);
+            string name = string.IsNullOrWhiteSpace(d.Name) ? DeviceIds.Bluetooth(d.Address) : d.Name;
+            return new BleDeviceInfo(d.Id, name, d.Address, d.IsConnected, d.Appearance, classicAddress == d.Address ? null : classicAddress);
+        }).ToList();
     }
 
     public async Task<BleBatteryRead> ReadAsync(BleDeviceInfo device, CancellationToken cancellationToken)
@@ -139,19 +118,9 @@ internal sealed class WinRtBleBatterySource : IBleBatterySource
 
     public void Dispose()
     {
-        DeviceWatcher? watcher;
-        lock (_lock)
-        {
-            _disposed = true;
-            watcher = _watcher;
-            _watcher = null;
-        }
-
-        if (watcher is not null)
-        {
-            Unsubscribe(watcher);
-            StopQuietly(watcher);
-        }
+        _lowEnergy.Changed -= OnLowEnergyChanged;
+        _lowEnergy.Dispose();
+        _classic.Dispose();
     }
 
     private static async Task<BleBatteryRead> ReadLevelAsync(BluetoothLEDevice ble, GattDeviceService service, CancellationToken ct)
@@ -199,201 +168,5 @@ internal sealed class WinRtBleBatterySource : IBleBatterySource
         return reader.ReadByte();
     }
 
-    // The classic halves of paired dual-mode devices, so their LE readings can be keyed by the classic address.
-    // Without them (query failed) LE readings are keyed by the LE address, which is right for LE-only devices.
-    private async Task<List<(ulong Address, Guid? Container)>> ListClassicAsync(CancellationToken cancellationToken)
-    {
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(ClassicQueryTimeout);
-        try
-        {
-            var found = await DeviceInformation.FindAllAsync(
-                BluetoothDevice.GetDeviceSelectorFromPairingState(true),
-                [AddressProperty, ContainerProperty],
-                DeviceInformationKind.AssociationEndpoint).AsTask(timeout.Token).ConfigureAwait(false);
-            var classic = new List<(ulong, Guid?)>();
-            foreach (var info in found)
-            {
-                if (info.Properties.TryGetValue(AddressProperty, out object? value) && BluetoothAddress.TryParse(value as string, out ulong address))
-                {
-                    classic.Add((address, ContainerOf(info)));
-                }
-            }
-
-            return classic;
-        }
-        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
-        {
-            // Best effort: a timeout or a WinRT error here only loses the dual-mode join.
-            _logger.LogDebug(ex, "Listing paired classic Bluetooth devices failed");
-            return [];
-        }
-    }
-
-    private static Guid? ContainerOf(DeviceInformation info) =>
-        info.Properties.TryGetValue(ContainerProperty, out object? value) && value is Guid id ? id : null;
-
-    private static BleDeviceInfo? ToInfo(DeviceInformation info, List<(ulong Address, Guid? Container)> classic)
-    {
-        if (!info.Properties.TryGetValue(AddressProperty, out object? addressValue)
-            || !BluetoothAddress.TryParse(addressValue as string, out ulong address))
-        {
-            return null;
-        }
-
-        bool connected = info.Properties.TryGetValue(ConnectedProperty, out object? connectedValue) && connectedValue is true;
-        ushort? appearance = info.Properties.TryGetValue(AppearanceProperty, out object? appearanceValue) && appearanceValue is ushort raw && raw != 0
-            ? raw
-            : null;
-        string name = string.IsNullOrWhiteSpace(info.Name) ? DeviceIds.Bluetooth(address) : info.Name;
-        ulong? classicAddress = BluetoothIdentity.ClassicAddressInContainer(ContainerOf(info), classic);
-        return new BleDeviceInfo(info.Id, name, address, connected, appearance, classicAddress == address ? null : classicAddress);
-    }
-
-    /// <summary>Starts a watcher if none is running; returns its first enumeration.</summary>
-    private Task EnsureWatcher()
-    {
-        lock (_lock)
-        {
-            ObjectDisposedException.ThrowIf(_disposed, this);
-            if (_watcher is not null)
-            {
-                return _enumerated.Task;
-            }
-
-            _enumerated = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            _watcherStartedAt = Environment.TickCount64;
-
-            // The paired selector asks for no radio scan.
-            _watcher = DeviceInformation.CreateWatcher(
-                BluetoothLEDevice.GetDeviceSelectorFromPairingState(true),
-                [AddressProperty, ConnectedProperty, AppearanceProperty, ContainerProperty],
-                DeviceInformationKind.AssociationEndpoint);
-            _watcher.Added += OnAdded;
-            _watcher.Updated += OnUpdated;
-            _watcher.Removed += OnRemoved;
-            _watcher.EnumerationCompleted += OnEnumerationCompleted;
-            _watcher.Stopped += OnStopped;
-            _watcher.Start();
-            return _enumerated.Task;
-        }
-    }
-
-    private void OnAdded(DeviceWatcher sender, DeviceInformation info)
-    {
-        lock (_lock)
-        {
-            if (sender != _watcher)
-            {
-                return;
-            }
-
-            _devices[info.Id] = info;
-        }
-
-        RaiseChanged();
-    }
-
-    private void OnUpdated(DeviceWatcher sender, DeviceInformationUpdate update)
-    {
-        lock (_lock)
-        {
-            if (sender != _watcher || !_devices.TryGetValue(update.Id, out var info))
-            {
-                return;
-            }
-
-            info.Update(update);
-        }
-
-        RaiseChanged();
-    }
-
-    private void OnRemoved(DeviceWatcher sender, DeviceInformationUpdate update)
-    {
-        lock (_lock)
-        {
-            if (sender != _watcher || !_devices.Remove(update.Id))
-            {
-                return;
-            }
-        }
-
-        RaiseChanged();
-    }
-
-    private void OnEnumerationCompleted(DeviceWatcher sender, object args)
-    {
-        lock (_lock)
-        {
-            if (sender == _watcher)
-            {
-                _enumerated.TrySetResult();
-            }
-        }
-    }
-
-    // A watcher that aborts (e.g. the Bluetooth service restarted) raises nothing more. Its devices are dropped (their
-    // connection state is no longer known) and a poll soon after starts a new watcher. One that stopped right after
-    // starting waits for the next scheduled poll instead, so a watcher that keeps failing cannot cause a poll every
-    // few seconds.
-    private void OnStopped(DeviceWatcher sender, object args)
-    {
-        bool restartSoon;
-        lock (_lock)
-        {
-            if (sender != _watcher)
-            {
-                return;
-            }
-
-            _logger.LogInformation("Bluetooth LE watcher stopped ({Status})", sender.Status);
-            Unsubscribe(sender);
-            _watcher = null;
-            _devices.Clear();
-            _enumerated.TrySetResult(); // release a poll waiting for this watcher's enumeration
-            restartSoon = Environment.TickCount64 - _watcherStartedAt >= (long)QuickStop.TotalMilliseconds;
-        }
-
-        if (restartSoon)
-        {
-            RaiseChanged();
-        }
-    }
-
-    private void Unsubscribe(DeviceWatcher watcher)
-    {
-        watcher.Added -= OnAdded;
-        watcher.Updated -= OnUpdated;
-        watcher.Removed -= OnRemoved;
-        watcher.EnumerationCompleted -= OnEnumerationCompleted;
-        watcher.Stopped -= OnStopped;
-    }
-
-    private void StopQuietly(DeviceWatcher watcher)
-    {
-        try
-        {
-            if (watcher.Status is DeviceWatcherStatus.Started or DeviceWatcherStatus.EnumerationCompleted)
-            {
-                watcher.Stop();
-            }
-        }
-        catch (Exception ex) when (ex is COMException or InvalidOperationException)
-        {
-            _logger.LogDebug(ex, "Stopping the Bluetooth LE watcher failed");
-        }
-    }
-
-    private void RaiseChanged()
-    {
-        try
-        {
-            DevicesChanged?.Invoke(this, EventArgs.Empty);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "A DevicesChanged handler threw");
-        }
-    }
+    private void OnLowEnergyChanged(object? sender, EventArgs e) => DevicesChanged?.Invoke(this, e);
 }

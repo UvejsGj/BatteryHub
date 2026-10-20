@@ -32,8 +32,11 @@ public sealed record BluetoothEndpoint(
     ushort? Appearance);
 
 /// <summary>The Windows calls the reader needs, abstracted so its logic can be tested.</summary>
-internal interface IBluetoothPropertySource
+internal interface IBluetoothPropertySource : IDisposable
 {
+    /// <summary>Raised when a paired device is added or removed, connects or disconnects.</summary>
+    event EventHandler? DevicesChanged;
+
     /// <summary>Present hands-free and LE device nodes with the battery value each holds.</summary>
     IReadOnlyList<BluetoothBatteryNode> ListNodes();
 

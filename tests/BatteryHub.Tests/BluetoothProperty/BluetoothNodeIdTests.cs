@@ -47,6 +47,7 @@ public class BluetoothNodeIdTests
     [InlineData(@"BTHENUM\{0000111E-0000-1000-8000-00805F9B34FB}_X\8&1&0&A0AB51C0FFEG_C00000000")] // not hex
     [InlineData(@"BTHLE\DEV_C0FFEE12345\7&1&0&c0ffee12345")]
     [InlineData(@"BTHLE\DEV_C0FFEE123456")] // no instance part
+    [InlineData(@"BTHENUM\{0000111E-0000-1000-8000-00805F9B34FB}_X\8&1&0&A0AB51C0FFEE_00000000")] // a local service's suffix
     [InlineData(DeviceNode)]
     [InlineData("")]
     public void Rejects_ids_without_a_remote_address(string instanceId) =>
@@ -79,6 +80,7 @@ public class BluetoothNodeIdTests
     [Theory]
     [InlineData("WH-1000XM4 Hands-Free AG", "WH-1000XM4")]
     [InlineData("  Jabra Elite 85t Hands-Free AG ", "Jabra Elite 85t")]
+    [InlineData("WH-1000XM4 hands-free ag", "WH-1000XM4")]
     [InlineData("Keyboard K380", "Keyboard K380")]
     [InlineData(" Hands-Free AG", "Hands-Free AG")]
     [InlineData("  ", null)]

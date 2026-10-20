@@ -62,7 +62,12 @@ internal static class BluetoothCommand
         PrintRawEndpoints("classic", BluetoothDevice.GetDeviceSelectorFromPairingState(true), EndpointProperties);
         PrintRawEndpoints("LE", BluetoothLEDevice.GetDeviceSelectorFromPairingState(true), LowEnergyEndpointProperties);
 
-        var endpoints = new WindowsBluetoothPropertySource().ListPairedAsync(CancellationToken.None).GetAwaiter().GetResult();
+        IReadOnlyList<BluetoothEndpoint> endpoints;
+        using (var source = new WindowsBluetoothPropertySource(new ProbeLogger<WindowsBluetoothPropertySource>()))
+        {
+            endpoints = source.ListPairedAsync(CancellationToken.None).GetAwaiter().GetResult();
+        }
+
         Console.WriteLine();
         Console.WriteLine($"Paired Bluetooth devices as the reader parsed them: {endpoints.Count}");
         foreach (var e in endpoints)

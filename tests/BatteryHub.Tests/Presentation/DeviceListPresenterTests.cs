@@ -57,6 +57,13 @@ public class DeviceListPresenterTests
         Assert.Equal(low, DeviceListPresenter.Row(Reading(percent, charge)).IsLow);
     }
 
+    [Fact]
+    public void The_threshold_can_be_changed()
+    {
+        Assert.True(DeviceListPresenter.Row(Reading(25), lowPercent: 30).IsLow);
+        Assert.False(DeviceListPresenter.Row(Reading(25)).IsLow);
+    }
+
     [Theory]
     [InlineData(CoarseLevel.Empty, "Empty", true)]
     [InlineData(CoarseLevel.Low, "Low", true)]

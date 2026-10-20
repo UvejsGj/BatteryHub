@@ -43,7 +43,26 @@ internal static class XInputCommand
         using var provider = new XInputProvider();
         var readings = provider.PollAsync(CancellationToken.None).GetAwaiter().GetResult();
         Readings.Print(Console.Out, readings);
+        if (HoldsEmpty(readings))
+        {
+            Console.WriteLine();
+            Console.WriteLine($"Readings {ConfirmWait.TotalSeconds:0} s later (what the app shows once a first \"empty\" holds):");
+            Readings.Print(Console.Out, PollAgain(provider));
+        }
+
         return 0;
+    }
+
+    // A first EMPTY is held back until it lasts EmptyConfirmDelay; the app's next poll (30 s later) shows it.
+    internal static readonly TimeSpan ConfirmWait = XInputConstants.EmptyConfirmDelay + TimeSpan.FromSeconds(1);
+
+    internal static bool HoldsEmpty(IReadOnlyList<BatteryReading> readings) =>
+        readings.Any(r => r.StatusDetail == XInputProvider.EmptyHeldDetail);
+
+    internal static IReadOnlyList<BatteryReading> PollAgain(XInputProvider provider)
+    {
+        Thread.Sleep(ConfirmWait);
+        return provider.PollAsync(CancellationToken.None).GetAwaiter().GetResult();
     }
 
     private static string HardwareNote(XInputHardware hardware) =>

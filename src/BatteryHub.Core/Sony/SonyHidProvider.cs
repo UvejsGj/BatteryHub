@@ -251,7 +251,7 @@ public sealed class SonyHidProvider : IBatteryProvider
         }
         catch (Exception ex)
         {
-            // Runs on a timer thread; an escaping exception would end the process.
+            // The timer callback discards this task, so nothing else would see the failure.
             _logger.LogWarning(ex, "Polling after a device change failed");
         }
     }

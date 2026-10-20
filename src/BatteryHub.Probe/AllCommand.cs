@@ -40,7 +40,7 @@ internal static class AllCommand
             new SonyHidProvider(new SonyHidOptions { RequestFullBluetoothReports = requestFullReports }, new ProbeLogger<SonyHidProvider>()),
             new XInputProvider(new ProbeLogger<XInputProvider>()),
             new BleBatteryProvider(new ProbeLogger<BleBatteryProvider>()),
-            new BluetoothPropertyProvider(),
+            new BluetoothPropertyProvider(new ProbeLogger<BluetoothPropertyProvider>()),
         ];
 
         var byProvider = new List<IReadOnlyList<BatteryReading>>();
@@ -53,6 +53,12 @@ internal static class AllCommand
                 try
                 {
                     var readings = provider.PollAsync(CancellationToken.None).GetAwaiter().GetResult();
+                    if (provider is XInputProvider xinput && XInputCommand.HoldsEmpty(readings))
+                    {
+                        Console.WriteLine($"  (a first \"empty\" is held back; reading again in {XInputCommand.ConfirmWait.TotalSeconds:0} s, as the app would)");
+                        readings = XInputCommand.PollAgain(xinput);
+                    }
+
                     Readings.Print(Console.Out, readings);
                     byProvider.Add(readings);
                 }

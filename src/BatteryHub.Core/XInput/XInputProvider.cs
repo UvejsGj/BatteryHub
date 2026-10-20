@@ -24,6 +24,9 @@ public sealed class XInputProvider : IBatteryProvider
 {
     public const string ProviderName = "xinput";
 
+    /// <summary>Shown while a first EMPTY is held back (see <see cref="XInputConstants.EmptyConfirmDelay"/>).</summary>
+    public const string EmptyHeldDetail = "Waiting for the controller to confirm its battery level";
+
     private readonly IXInputSource _source;
     private readonly ILogger _logger;
     private readonly TimeProvider _time;
@@ -116,18 +119,20 @@ public sealed class XInputProvider : IBatteryProvider
 
         if (level == CoarseLevel.Empty && !EmptyConfirmed(ref _slots[user]))
         {
-            return Waiting(user);
+            return Reading(user) with { Status = ReadingStatus.NoData, StatusDetail = EmptyHeldDetail };
         }
 
-        _slots[user] = new Slot(LevelTrusted: true, FirstEmptyAt: null);
+        _slots[user] = new Slot(LastShown: level, FirstEmptyAt: null);
         return Reading(user) with { CoarseLevel = level };
     }
 
     // Some pads report EMPTY right after connecting, before their real level arrives (XBatteryStatus treats it as
-    // "not reported yet"). An EMPTY counts once the pad has reported another level, or EMPTY has held for a while.
+    // "not reported yet"). An EMPTY counts at once after LOW (normal discharge); otherwise only once it has held for
+    // a while. Polls are 30 s apart, so a pad can drop and reconnect unseen: a jump from MEDIUM or FULL straight to
+    // EMPTY is treated like a fresh connection.
     private bool EmptyConfirmed(ref Slot slot)
     {
-        if (slot.LevelTrusted)
+        if (slot.LastShown is CoarseLevel.Low or CoarseLevel.Empty)
         {
             return true;
         }
@@ -158,7 +163,9 @@ public sealed class XInputProvider : IBatteryProvider
     };
 
     /// <summary>What the reader remembers about the pad in one slot while it stays connected.</summary>
-    private readonly record struct Slot(bool LevelTrusted, DateTimeOffset? FirstEmptyAt);
+    /// <param name="LastShown">The level last shown for this pad.</param>
+    /// <param name="FirstEmptyAt">When the EMPTY being held back was first seen.</param>
+    private readonly record struct Slot(CoarseLevel? LastShown, DateTimeOffset? FirstEmptyAt);
 }
 
 /// <summary>XInputGetCapabilitiesEx's answer for one slot, as the Probe prints it.</summary>

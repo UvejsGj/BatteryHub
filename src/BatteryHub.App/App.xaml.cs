@@ -53,7 +53,7 @@ public partial class App : Application
                 sony,
                 new XInputProvider(new TraceLogger<XInputProvider>()),
                 new BleBatteryProvider(new TraceLogger<BleBatteryProvider>()),
-                new BluetoothPropertyProvider(),
+                new BluetoothPropertyProvider(new TraceLogger<BluetoothPropertyProvider>()),
             ],
             new TraceLogger<BatteryMonitor>());
         var startup = new StartupRegistration(new StartupRegistry(), Environment.ProcessPath ?? throw new InvalidOperationException("No process path."));

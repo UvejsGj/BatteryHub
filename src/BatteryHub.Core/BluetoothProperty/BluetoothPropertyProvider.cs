@@ -1,3 +1,6 @@
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+
 namespace BatteryHub.Core.BluetoothProperty;
 
 /// <summary>What one poll learned about one device node. The Probe prints it.</summary>
@@ -12,7 +15,8 @@ public sealed record BluetoothPropertyInspection(
 /// <summary>
 /// The battery level Windows itself stores for Bluetooth devices, the number Settings shows: classic headsets that
 /// report it over the hands-free profile (HFP), and LE devices with a Battery Service, including keyboards, mice and
-/// pads whose GATT service apps may not read. Polled every 60 seconds.
+/// pads whose GATT service apps may not read. Polled every 60 seconds, and 2 seconds after a paired device connects
+/// or disconnects.
 /// </summary>
 /// <remarks>
 /// Windows keeps the last value after a device disconnects (for months, in reports), so a value is shown only while
@@ -23,31 +27,38 @@ public sealed class BluetoothPropertyProvider : IBatteryProvider
 {
     public const string ProviderName = "bt-property";
 
+    // Windows raises several updates while one device connects; poll once they settle.
+    private static readonly TimeSpan ChangeDebounce = TimeSpan.FromSeconds(2);
+
     private readonly IBluetoothPropertySource _source;
+    private readonly ILogger _logger;
     private readonly TimeProvider _time;
+
+    // One inspection at a time, so a poll that started before a disconnect cannot finish after the one that saw it.
+    private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly ITimer _changeTimer;
     private volatile bool _disposed;
 
-    public BluetoothPropertyProvider(TimeProvider? time = null)
-        : this(new WindowsBluetoothPropertySource(), time)
+    public BluetoothPropertyProvider(ILogger<BluetoothPropertyProvider>? logger = null, TimeProvider? time = null)
+        : this(new WindowsBluetoothPropertySource(logger), logger, time)
     {
     }
 
-    internal BluetoothPropertyProvider(IBluetoothPropertySource source, TimeProvider? time = null)
+    internal BluetoothPropertyProvider(IBluetoothPropertySource source, ILogger? logger = null, TimeProvider? time = null)
     {
         _source = source;
+        _logger = logger ?? NullLogger.Instance;
         _time = time ?? TimeProvider.System;
+        _changeTimer = _time.CreateTimer(_ => _ = PollAfterChangeAsync(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        _source.DevicesChanged += OnDevicesChanged;
     }
 
     public string Name => ProviderName;
 
     public TimeSpan PollInterval { get; } = TimeSpan.FromSeconds(60);
 
-    // Windows raises no event when it rewrites the value; polling covers it.
-    public event EventHandler<ReadingsChangedEventArgs>? ReadingsChanged
-    {
-        add { }
-        remove { }
-    }
+    /// <summary>Raised after a paired device connects or disconnects. Windows raises nothing when it rewrites a level.</summary>
+    public event EventHandler<ReadingsChangedEventArgs>? ReadingsChanged;
 
     public async Task<IReadOnlyList<BatteryReading>> PollAsync(CancellationToken cancellationToken)
     {
@@ -64,19 +75,40 @@ public sealed class BluetoothPropertyProvider : IBatteryProvider
     public async Task<IReadOnlyList<BluetoothPropertyInspection>> InspectAsync(CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        var nodes = await Task.Run(_source.ListNodes, cancellationToken).ConfigureAwait(false);
-        if (nodes.Count == 0)
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            return [];
-        }
+            // About a millisecond of CfgMgr32 calls; callers already poll off the UI thread (the monitor starts every
+            // poll on the thread pool).
+            var nodes = _source.ListNodes();
+            if (nodes.Count == 0)
+            {
+                return [];
+            }
 
-        var endpoints = await _source.ListPairedAsync(cancellationToken).ConfigureAwait(false);
-        var classic = endpoints.Where(e => !e.IsLowEnergy).Select(e => (e.Address, e.ContainerId)).ToList();
-        var now = _time.GetUtcNow();
-        return nodes.Select(node => Inspect(node, Match(node, endpoints), classic, now)).ToList();
+            var endpoints = await _source.ListPairedAsync(cancellationToken).ConfigureAwait(false);
+            var classic = endpoints.Where(e => !e.IsLowEnergy).Select(e => (e.Address, e.ContainerId)).ToList();
+            var now = _time.GetUtcNow();
+            return nodes.Select(node => Inspect(node, Match(node, endpoints), classic, now)).ToList();
+        }
+        finally
+        {
+            _gate.Release();
+        }
     }
 
-    public void Dispose() => _disposed = true;
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        _source.DevicesChanged -= OnDevicesChanged;
+        _changeTimer.Dispose();
+        _source.Dispose();
+    }
 
     /// <summary>The paired device a node belongs to: same transport, same address.</summary>
     /// <remarks>
@@ -135,4 +167,38 @@ public sealed class BluetoothPropertyProvider : IBatteryProvider
     private static string NameFor(BluetoothBatteryNode node, BluetoothEndpoint endpoint) =>
         !string.IsNullOrWhiteSpace(endpoint.Name) ? endpoint.Name
         : BluetoothNodeId.NameFromFriendlyName(node.FriendlyName) ?? DeviceIds.Bluetooth(node.Address);
+
+    private void OnDevicesChanged(object? sender, EventArgs e)
+    {
+        try
+        {
+            _changeTimer.Change(ChangeDebounce, Timeout.InfiniteTimeSpan);
+        }
+        catch (ObjectDisposedException)
+        {
+            // Disposed between the source raising the event and this handler running.
+        }
+    }
+
+    private async Task PollAfterChangeAsync()
+    {
+        if (_disposed || ReadingsChanged is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var readings = await PollAsync(CancellationToken.None).ConfigureAwait(false);
+            ReadingsChanged?.Invoke(this, new ReadingsChangedEventArgs(readings));
+        }
+        catch (ObjectDisposedException) when (_disposed)
+        {
+        }
+        catch (Exception ex)
+        {
+            // The timer callback discards this task, so nothing else would see the failure.
+            _logger.LogWarning(ex, "Reading stored Bluetooth levels after a device change failed");
+        }
+    }
 }

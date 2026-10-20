@@ -53,7 +53,8 @@ public class XInputTests
     public async Task Reports_battery_pads_by_slot_and_skips_the_rest()
     {
         var time = new FakeTimeProvider(new DateTimeOffset(2026, 10, 7, 12, 0, 0, TimeSpan.Zero));
-        var source = new FakeSource(new XInputBattery(0x01, 0x03), null, new XInputBattery(0x03, 0x01), new XInputBattery(0x02, 0x03));
+        // Wired, unknown battery type, NiMH low, alkaline full.
+        var source = new FakeSource(new XInputBattery(0x01, 0x03), new XInputBattery(0xFF, 0x03), new XInputBattery(0x03, 0x01), new XInputBattery(0x02, 0x03));
         using var provider = new XInputProvider(source, time: time);
 
         var readings = await provider.PollAsync(TestContext.Current.CancellationToken);
@@ -95,6 +96,24 @@ public class XInputTests
     }
 
     [Theory]
+    [InlineData(0x00)] // not reported yet
+    [InlineData(0x01)] // wired
+    [InlineData(0xFF)] // unknown
+    public async Task Bluetooth_rules_apply_whatever_battery_type_xinput_reports(int type)
+    {
+        // XInput's battery data for pads on Bluetooth is unreliable, so the type cannot be relied on either.
+        var source = new FakeSource(new XInputBattery((byte)type, 0x00), new XInputBattery((byte)type, 0x00));
+        source.Hardware[0] = new XInputHardware(0x045E, 0x0B13); // Bluetooth LE: left to the Bluetooth readers
+        source.Hardware[1] = new XInputHardware(0x045E, 0x02FD); // classic Bluetooth: "no data"
+        using var provider = new XInputProvider(source);
+
+        var reading = Assert.Single(await provider.PollAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(("xinput-2", ConnectionType.Bluetooth), (reading.DeviceId, reading.Connection));
+        Assert.Contains("classic Bluetooth", reading.StatusDetail);
+    }
+
+    [Theory]
     [InlineData(0x02E0)] // Xbox One S, first revision
     [InlineData(0x02FD)] // Xbox One S
     [InlineData(0x0B05)] // Elite 2
@@ -117,6 +136,8 @@ public class XInputTests
     [InlineData(0x045E, 0x0B12)] // Xbox Series pad on USB or the adapter
     [InlineData(0x045E, 0x0000)] // wireless Xbox 360 pad (reports product 0)
     [InlineData(0x0E6F, 0x02FD)] // another vendor with a product ID that matches a Microsoft one
+    [InlineData(0x0E6F, 0x0B13)]
+    [InlineData(0x0E6F, 0x11FF)] // ... or Steam's virtual pad
     [InlineData(0x28DE, 0x1102)] // another Valve product
     public void Other_hardware_is_kept(int vendor, int product)
     {
@@ -133,11 +154,50 @@ public class XInputTests
         using var provider = new XInputProvider(source, time: time);
         var ct = TestContext.Current.CancellationToken;
 
-        Assert.Equal(ReadingStatus.NoData, Assert.Single(await provider.PollAsync(ct)).Status);
+        var held = Assert.Single(await provider.PollAsync(ct));
+        Assert.Equal((ReadingStatus.NoData, XInputProvider.EmptyHeldDetail), (held.Status, held.StatusDetail));
         time.Advance(TimeSpan.FromSeconds(9));
         Assert.Equal(ReadingStatus.NoData, Assert.Single(await provider.PollAsync(ct)).Status);
         time.Advance(TimeSpan.FromSeconds(1));
         Assert.Equal(CoarseLevel.Empty, Assert.Single(await provider.PollAsync(ct)).CoarseLevel);
+
+        // Once shown, it stays shown: a dying pad must not flip between "Empty" and "no data".
+        time.Advance(TimeSpan.FromSeconds(30));
+        Assert.Equal(CoarseLevel.Empty, Assert.Single(await provider.PollAsync(ct)).CoarseLevel);
+    }
+
+    [Theory]
+    [InlineData(0x02)] // medium
+    [InlineData(0x03)] // full
+    public async Task A_jump_to_empty_from_a_high_level_waits_like_a_fresh_connection(byte previous)
+    {
+        // Polls are 30 s apart: a pad can drop and reconnect unseen, then report its connect-time EMPTY.
+        var time = new FakeTimeProvider(new DateTimeOffset(2026, 10, 7, 12, 0, 0, TimeSpan.Zero));
+        var source = new FakeSource(new XInputBattery(0x03, previous));
+        using var provider = new XInputProvider(source, time: time);
+        var ct = TestContext.Current.CancellationToken;
+        await provider.PollAsync(ct);
+
+        source.Slots = [new XInputBattery(0x03, 0x00)];
+        time.Advance(TimeSpan.FromSeconds(30));
+        Assert.Equal(ReadingStatus.NoData, Assert.Single(await provider.PollAsync(ct)).Status);
+        time.Advance(TimeSpan.FromSeconds(30));
+        Assert.Equal(CoarseLevel.Empty, Assert.Single(await provider.PollAsync(ct)).CoarseLevel);
+    }
+
+    [Fact]
+    public async Task The_empty_hold_is_per_slot()
+    {
+        var source = new FakeSource(new XInputBattery(0x02, 0x01), null, null);
+        using var provider = new XInputProvider(source);
+        var ct = TestContext.Current.CancellationToken;
+        await provider.PollAsync(ct); // slot 1 reported LOW
+
+        source.Slots = [new XInputBattery(0x02, 0x00), null, new XInputBattery(0x02, 0x00)];
+        var readings = await provider.PollAsync(ct);
+
+        Assert.Equal(CoarseLevel.Empty, readings.Single(r => r.DeviceId == "xinput-1").CoarseLevel);
+        Assert.Equal(ReadingStatus.NoData, readings.Single(r => r.DeviceId == "xinput-3").Status);
     }
 
     [Fact]
@@ -154,12 +214,14 @@ public class XInputTests
     }
 
     [Theory]
-    [InlineData(false)] // the pad left the slot
-    [InlineData(true)] // the slot reported "no data yet" again, e.g. after a reconnect
-    public async Task A_new_pad_in_the_slot_starts_afresh(bool awaitingData)
+    [InlineData(false, 0x01)] // the pad left the slot
+    [InlineData(true, 0x01)] // the slot reported "no data yet" again, e.g. after a reconnect
+    [InlineData(false, 0x00)] // ... and the old pad's own held EMPTY does not count for the new one
+    [InlineData(true, 0x00)]
+    public async Task A_new_pad_in_the_slot_starts_afresh(bool awaitingData, byte firstLevel)
     {
         var time = new FakeTimeProvider(new DateTimeOffset(2026, 10, 7, 12, 0, 0, TimeSpan.Zero));
-        var source = new FakeSource(new XInputBattery(0x02, 0x02));
+        var source = new FakeSource(new XInputBattery(0x02, firstLevel));
         using var provider = new XInputProvider(source, time: time);
         var ct = TestContext.Current.CancellationToken;
         await provider.PollAsync(ct);
@@ -172,10 +234,31 @@ public class XInputTests
         Assert.Equal(ReadingStatus.NoData, Assert.Single(await provider.PollAsync(ct)).Status);
     }
 
-    [Fact]
-    public async Task Missing_xinput_gives_no_readings_instead_of_failing()
+    [Theory]
+    [InlineData(0x0B13)] // a Bluetooth LE pad in between
+    [InlineData(0x02FD)] // a classic Bluetooth pad in between
+    public async Task A_bluetooth_pad_in_between_does_not_lend_its_slot_state(int product)
     {
-        using var provider = new XInputProvider(new FakeSource { Error = new DllNotFoundException("xinput1_4.dll") });
+        var source = new FakeSource(new XInputBattery(0x02, 0x01));
+        using var provider = new XInputProvider(source);
+        var ct = TestContext.Current.CancellationToken;
+        await provider.PollAsync(ct); // an adapter pad at LOW: its EMPTY would show at once
+
+        source.Hardware[0] = new XInputHardware(0x045E, (ushort)product);
+        await provider.PollAsync(ct);
+        source.Hardware.Clear();
+        source.Slots = [new XInputBattery(0x02, 0x00)]; // a new adapter pad's connect-time EMPTY
+
+        Assert.Equal(ReadingStatus.NoData, Assert.Single(await provider.PollAsync(ct)).Status);
+    }
+
+    public static TheoryData<Exception> Unavailable => [new DllNotFoundException("xinput1_4.dll"), new EntryPointNotFoundException("XInputGetBatteryInformation")];
+
+    [Theory]
+    [MemberData(nameof(Unavailable))]
+    public async Task Missing_xinput_gives_no_readings_instead_of_failing(Exception error)
+    {
+        using var provider = new XInputProvider(new FakeSource { Error = error });
 
         Assert.Empty(await provider.PollAsync(TestContext.Current.CancellationToken));
         Assert.Empty(await provider.PollAsync(TestContext.Current.CancellationToken));

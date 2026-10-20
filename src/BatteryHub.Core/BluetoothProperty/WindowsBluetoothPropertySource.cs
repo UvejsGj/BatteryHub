@@ -1,23 +1,29 @@
 using BatteryHub.Core.Windows;
-using Windows.Devices.Bluetooth;
-using Windows.Devices.Enumeration;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace BatteryHub.Core.BluetoothProperty;
 
 /// <summary>
 /// Device nodes through CfgMgr32 (a sweep of the BTHENUM and BTHLE enumerators takes about a millisecond) and paired
-/// devices through WinRT association endpoints. The paired-device selectors read Windows' records: no radio scan,
+/// devices through watchers over Windows' association-endpoint records, which read Windows' records: no radio scan,
 /// no connection.
 /// </summary>
 internal sealed class WindowsBluetoothPropertySource : IBluetoothPropertySource
 {
-    private const string AddressProperty = "System.Devices.Aep.DeviceAddress";
-    private const string ConnectedProperty = "System.Devices.Aep.IsConnected";
-    private const string ContainerProperty = "System.Devices.Aep.ContainerId";
-    private const string AppearanceProperty = "System.Devices.Aep.Bluetooth.Le.Appearance";
+    private readonly PairedDeviceWatcher _classic;
+    private readonly PairedDeviceWatcher _lowEnergy;
 
-    // Paired-device queries answer in tens of milliseconds; a stuck Bluetooth service should not hold a poll.
-    private static readonly TimeSpan QueryTimeout = TimeSpan.FromSeconds(15);
+    public WindowsBluetoothPropertySource(ILogger? logger = null)
+    {
+        var log = logger ?? NullLogger.Instance;
+        _classic = PairedDeviceWatcher.Classic(log);
+        _lowEnergy = PairedDeviceWatcher.LowEnergy(log);
+        _classic.Changed += OnChanged;
+        _lowEnergy.Changed += OnChanged;
+    }
+
+    public event EventHandler? DevicesChanged;
 
     public IReadOnlyList<BluetoothBatteryNode> ListNodes()
     {
@@ -38,29 +44,21 @@ internal sealed class WindowsBluetoothPropertySource : IBluetoothPropertySource
 
     public async Task<IReadOnlyList<BluetoothEndpoint>> ListPairedAsync(CancellationToken cancellationToken)
     {
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(QueryTimeout);
-        try
-        {
-            var classic = await DeviceInformation.FindAllAsync(
-                BluetoothDevice.GetDeviceSelectorFromPairingState(true),
-                [AddressProperty, ConnectedProperty, ContainerProperty],
-                DeviceInformationKind.AssociationEndpoint).AsTask(timeout.Token).ConfigureAwait(false);
-            var lowEnergy = await DeviceInformation.FindAllAsync(
-                BluetoothLEDevice.GetDeviceSelectorFromPairingState(true),
-                [AddressProperty, ConnectedProperty, ContainerProperty, AppearanceProperty],
-                DeviceInformationKind.AssociationEndpoint).AsTask(timeout.Token).ConfigureAwait(false);
+        var classic = await _classic.ListAsync(cancellationToken).ConfigureAwait(false);
+        var lowEnergy = await _lowEnergy.ListAsync(cancellationToken).ConfigureAwait(false);
+        return
+        [
+            .. classic.Select(d => new BluetoothEndpoint(d.Address, false, d.Name, d.IsConnected, d.ContainerId, null)),
+            .. lowEnergy.Select(d => new BluetoothEndpoint(d.Address, true, d.Name, d.IsConnected, d.ContainerId, d.Appearance)),
+        ];
+    }
 
-            return
-            [
-                .. classic.Select(info => ToEndpoint(info, lowEnergy: false)).OfType<BluetoothEndpoint>(),
-                .. lowEnergy.Select(info => ToEndpoint(info, lowEnergy: true)).OfType<BluetoothEndpoint>(),
-            ];
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            throw new TimeoutException($"Windows did not list paired Bluetooth devices within {QueryTimeout.TotalSeconds:0} s.");
-        }
+    public void Dispose()
+    {
+        _classic.Changed -= OnChanged;
+        _lowEnergy.Changed -= OnChanged;
+        _classic.Dispose();
+        _lowEnergy.Dispose();
     }
 
     /// <summary>Null when the node went away since it was listed, or carries no remote address.</summary>
@@ -90,19 +88,5 @@ internal sealed class WindowsBluetoothPropertySource : IBluetoothPropertySource
             battery.Describe());
     }
 
-    private static BluetoothEndpoint? ToEndpoint(DeviceInformation info, bool lowEnergy)
-    {
-        if (!info.Properties.TryGetValue(AddressProperty, out object? addressValue)
-            || !BluetoothAddress.TryParse(addressValue as string, out ulong address))
-        {
-            return null;
-        }
-
-        bool connected = info.Properties.TryGetValue(ConnectedProperty, out object? connectedValue) && connectedValue is true;
-        Guid? container = info.Properties.TryGetValue(ContainerProperty, out object? containerValue) && containerValue is Guid id ? id : null;
-        ushort? appearance = info.Properties.TryGetValue(AppearanceProperty, out object? appearanceValue) && appearanceValue is ushort raw && raw != 0
-            ? raw
-            : null;
-        return new BluetoothEndpoint(address, lowEnergy, info.Name, connected, container, appearance);
-    }
+    private void OnChanged(object? sender, EventArgs e) => DevicesChanged?.Invoke(this, e);
 }

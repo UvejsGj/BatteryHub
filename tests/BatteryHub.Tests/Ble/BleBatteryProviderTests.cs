@@ -144,29 +144,106 @@ public class BleBatteryProviderTests
     }
 
     [Fact]
-    public async Task A_device_change_triggers_a_poll_and_a_push()
+    public void Device_changes_are_settled_into_one_poll_and_a_push()
     {
         _source.Devices.Add(Device("kb", 8));
         _source.SetRead("kb", Plain55);
         using var provider = Provider();
-        var pushed = new TaskCompletionSource<IReadOnlyList<BatteryReading>>(TaskCreationOptions.RunContinuationsAsynchronously);
-        provider.ReadingsChanged += (_, e) => pushed.TrySetResult(e.Readings);
+        var pushes = new List<IReadOnlyList<BatteryReading>>();
+        provider.ReadingsChanged += (_, e) => pushes.Add(e.Readings);
+
+        _source.RaiseDevicesChanged();
+        _time.Advance(TimeSpan.FromSeconds(1.5));
+        _source.RaiseDevicesChanged(); // Windows raises several updates while one device connects
+        _time.Advance(TimeSpan.FromSeconds(1.5));
+        Assert.Empty(_source.ReadLog); // not until the changes have been quiet for 2 s
+        _time.Advance(TimeSpan.FromSeconds(1));
+        _time.Advance(TimeSpan.FromMinutes(10)); // one poll per burst, never a repeating timer
+
+        Assert.Single(_source.ReadLog);
+        Assert.Equal(55, Assert.Single(Assert.Single(pushes)).Percent);
+        Assert.Equal(TimeSpan.FromMinutes(5), provider.PollInterval);
+    }
+
+    [Fact]
+    public void Nothing_is_read_after_a_change_when_nobody_listens()
+    {
+        _source.Devices.Add(Device("kb", 8));
+        _source.SetRead("kb", Plain55);
+        using var provider = Provider();
 
         _source.RaiseDevicesChanged();
         _time.Advance(TimeSpan.FromSeconds(3));
 
-        var readings = await pushed.Task.WaitAsync(TimeSpan.FromSeconds(5), Ct);
-        Assert.Equal(55, Assert.Single(readings).Percent);
+        Assert.Empty(_source.ReadLog);
     }
 
     [Fact]
-    public void Dispose_releases_the_source()
+    public async Task A_poll_after_a_change_waits_for_one_already_running()
     {
+        // Two polls at once would both read the device and race on the skip state.
+        var source = new BlockingSource();
+        using var provider = new BleBatteryProvider(source, time: _time);
+        var pushed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        provider.ReadingsChanged += (_, _) => pushed.TrySetResult();
+
+        var running = provider.PollAsync(Ct); // held inside the read
+        source.Raise();
+        _time.Advance(TimeSpan.FromSeconds(3)); // the change poll starts now
+
+        Assert.Equal(1, source.MaxInFlight);
+        source.Release.SetResult();
+        await running;
+        await pushed.Task.WaitAsync(TimeSpan.FromSeconds(5), Ct);
+        Assert.Equal((2, 1), (source.Reads, source.MaxInFlight));
+    }
+
+    [Fact]
+    public void Dispose_releases_the_source_and_stops_pushing()
+    {
+        _source.Devices.Add(Device("kb", 8));
+        _source.SetRead("kb", Plain55);
         var provider = Provider();
+        int pushes = 0;
+        provider.ReadingsChanged += (_, _) => pushes++;
+        _source.RaiseDevicesChanged();
 
         provider.Dispose();
+        _time.Advance(TimeSpan.FromSeconds(3));
 
-        Assert.True(_source.Disposed);
+        Assert.Equal((true, 0), (_source.Disposed, pushes));
+        Assert.Empty(_source.ReadLog);
+    }
+
+    private sealed class BlockingSource : IBleBatterySource
+    {
+        private int _inFlight;
+
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public int Reads;
+
+        public int MaxInFlight;
+
+        public event EventHandler? DevicesChanged;
+
+        public void Raise() => DevicesChanged?.Invoke(this, EventArgs.Empty);
+
+        public Task<IReadOnlyList<BleDeviceInfo>> ListPairedAsync(CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<BleDeviceInfo>>([new("kb", "Keyboard", 8, true, null)]);
+
+        public async Task<BleBatteryRead> ReadAsync(BleDeviceInfo device, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref Reads);
+            MaxInFlight = Math.Max(MaxInFlight, Interlocked.Increment(ref _inFlight));
+            await Release.Task;
+            Interlocked.Decrement(ref _inFlight);
+            return new BleBatteryRead(BleReadStatus.Ok, 55);
+        }
+
+        public void Dispose()
+        {
+        }
     }
 
     [Theory]

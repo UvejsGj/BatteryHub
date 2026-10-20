@@ -15,7 +15,7 @@ public class BluetoothPropertyProviderTests
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private BluetoothPropertyProvider Provider() => new(_source, _time);
+    private BluetoothPropertyProvider Provider() => new(_source, time: _time);
 
     private static BluetoothBatteryNode HandsFreeNode(int? percent, ulong address = HeadsetAddress, Guid? container = null) =>
         new($@"BTHENUM\{{0000111E-0000-1000-8000-00805F9B34FB}}_X\8&1&0&{address:X12}_C00000000", BluetoothNodeKind.HandsFree,
@@ -47,11 +47,13 @@ public class BluetoothPropertyProviderTests
         Assert.Equal(_time.GetUtcNow(), reading.Timestamp);
     }
 
-    [Fact]
-    public async Task Never_shows_the_level_Windows_kept_after_a_disconnect()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Never_shows_the_level_Windows_kept_after_a_disconnect(bool lowEnergy)
     {
-        _source.Nodes.Add(HandsFreeNode(1));
-        _source.Endpoints.Add(Classic(connected: false));
+        _source.Nodes.Add(lowEnergy ? LowEnergyNode(1) : HandsFreeNode(1));
+        _source.Endpoints.Add(lowEnergy ? Le(connected: false) : Classic(connected: false));
         using var provider = Provider();
 
         Assert.Empty(await provider.PollAsync(Ct));
@@ -144,6 +146,20 @@ public class BluetoothPropertyProviderTests
         Assert.Equal(("bt-a0ab51c0ffee", (int?)64), (reading.DeviceId, reading.Percent));
     }
 
+    [Theory]
+    [InlineData(true, false)] // only the paired LE device carries the container
+    [InlineData(false, true)] // only the LE node does
+    public async Task The_container_join_works_from_either_side(bool onEndpoint, bool onNode)
+    {
+        var container = Guid.Parse("3f2504e0-4f89-11d3-9a0c-0305e82c3301");
+        _source.Nodes.Add(LowEnergyNode(64, container: onNode ? container : null));
+        _source.Endpoints.Add(Classic(connected: true, container: container));
+        _source.Endpoints.Add(Le(connected: true, container: onEndpoint ? container : null));
+        using var provider = Provider();
+
+        Assert.Equal("bt-a0ab51c0ffee", Assert.Single(await provider.PollAsync(Ct)).DeviceId);
+    }
+
     [Fact]
     public async Task An_le_only_device_keeps_its_own_address()
     {
@@ -233,12 +249,83 @@ public class BluetoothPropertyProviderTests
     }
 
     [Fact]
-    public void Polls_every_minute_without_push_events()
+    public void Polls_every_minute()
     {
         using var provider = Provider();
-        provider.ReadingsChanged += (_, _) => Assert.Fail("never raised");
 
         Assert.Equal(TimeSpan.FromSeconds(60), provider.PollInterval);
         Assert.Equal("bt-property", provider.Name);
+    }
+
+    [Fact]
+    public void A_disconnect_is_pushed_once_the_changes_settle()
+    {
+        _source.Nodes.Add(LowEnergyNode(55));
+        _source.Endpoints.Add(Le(connected: false));
+        using var provider = Provider();
+        var pushes = new List<IReadOnlyList<BatteryReading>>();
+        provider.ReadingsChanged += (_, e) => pushes.Add(e.Readings);
+
+        _source.RaiseDevicesChanged();
+        _time.Advance(TimeSpan.FromSeconds(1.5));
+        _source.RaiseDevicesChanged(); // Windows raises several updates for one change
+        _time.Advance(TimeSpan.FromSeconds(1.5));
+        Assert.Equal(0, _source.PairedQueries); // not until the changes have been quiet for 2 s
+        _time.Advance(TimeSpan.FromSeconds(1));
+        _time.Advance(TimeSpan.FromMinutes(1)); // one poll per burst, never a repeating timer
+
+        Assert.Empty(Assert.Single(pushes)); // the device's row goes within seconds, not at the next 60 s poll
+        Assert.Equal(1, _source.PairedQueries);
+    }
+
+    [Fact]
+    public void Nothing_is_read_after_a_change_when_nobody_listens()
+    {
+        _source.Nodes.Add(LowEnergyNode(55));
+        using var provider = Provider();
+
+        _source.RaiseDevicesChanged();
+        _time.Advance(TimeSpan.FromSeconds(3));
+
+        Assert.Equal(0, _source.PairedQueries);
+    }
+
+    [Fact]
+    public async Task A_poll_after_a_change_waits_for_one_already_running()
+    {
+        // Otherwise a poll that started before a disconnect could finish after the one that saw it.
+        _source.Nodes.Add(LowEnergyNode(55));
+        _source.Endpoints.Add(Le(connected: true));
+        _source.Hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var provider = Provider();
+        var pushed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        provider.ReadingsChanged += (_, _) => pushed.TrySetResult();
+
+        var running = provider.PollAsync(Ct); // held inside the paired-device query
+        _source.RaiseDevicesChanged();
+        _time.Advance(TimeSpan.FromSeconds(3)); // the change poll starts now
+
+        Assert.Equal((1, 1), (_source.PairedQueries, _source.MaxInFlight));
+        _source.Hold.SetResult();
+        await running;
+        await pushed.Task.WaitAsync(TimeSpan.FromSeconds(5), Ct);
+        Assert.Equal((2, 1), (_source.PairedQueries, _source.MaxInFlight));
+    }
+
+    [Fact]
+    public void Dispose_stops_listening_and_disposes_the_source()
+    {
+        _source.Nodes.Add(LowEnergyNode(55));
+        var provider = Provider();
+        int pushes = 0;
+        provider.ReadingsChanged += (_, _) => pushes++;
+        _source.RaiseDevicesChanged();
+
+        provider.Dispose();
+        _time.Advance(TimeSpan.FromSeconds(3));
+        _source.RaiseDevicesChanged();
+        _time.Advance(TimeSpan.FromSeconds(3));
+
+        Assert.Equal((0, 0, true), (pushes, _source.PairedQueries, _source.Disposed));
     }
 }
