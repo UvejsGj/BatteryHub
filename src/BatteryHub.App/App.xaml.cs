@@ -18,7 +18,7 @@ public partial class App : Application
     private static readonly TimeSpan IconRetryInterval = TimeSpan.FromSeconds(5);
     private static readonly Uri IconUri = new("pack://application:,,,/Assets/BatteryHub.ico");
 
-    private readonly TraceLogger<App> _logger = new();
+    private readonly AppLogger<App> _logger = new();
     private SingleInstance? _instance;
     private BatteryMonitor? _monitor;
     private TaskbarIcon? _tray;
@@ -38,24 +38,25 @@ public partial class App : Application
             return;
         }
 
+        _logger.Log(Microsoft.Extensions.Logging.LogLevel.Information, default, $"BatteryHub {typeof(App).Assembly.GetName().Version} starting", null, (s, _) => s);
         DispatcherUnhandledException += OnDispatcherUnhandledException;
         TaskScheduler.UnobservedTaskException += (_, args) => _logger.Log(Microsoft.Extensions.Logging.LogLevel.Error, default, "Unobserved task exception", args.Exception, (s, _) => s);
 
-        var store = new SettingsStore(SettingsStore.DefaultDirectory, new TraceLogger<SettingsStore>());
+        var store = new SettingsStore(SettingsStore.DefaultDirectory, new AppLogger<SettingsStore>());
         var settings = store.Load();
         var sony = new SonyHidProvider(
             new SonyHidOptions { RequestFullBluetoothReports = settings.ReadBluetoothPlayStationControllers },
-            new TraceLogger<SonyHidProvider>());
+            new AppLogger<SonyHidProvider>());
         // The order settles ties: for two equally good readings of one device, the earlier reader's is shown.
         // The Probe's "all" command uses the same list.
         _monitor = new BatteryMonitor(
             [
                 sony,
-                new XInputProvider(new TraceLogger<XInputProvider>()),
-                new BleBatteryProvider(new TraceLogger<BleBatteryProvider>()),
-                new BluetoothPropertyProvider(new TraceLogger<BluetoothPropertyProvider>()),
+                new XInputProvider(new AppLogger<XInputProvider>()),
+                new BleBatteryProvider(new AppLogger<BleBatteryProvider>()),
+                new BluetoothPropertyProvider(new AppLogger<BluetoothPropertyProvider>()),
             ],
-            new TraceLogger<BatteryMonitor>());
+            new AppLogger<BatteryMonitor>());
         var startup = new StartupRegistration(new StartupRegistry(), Environment.ProcessPath ?? throw new InvalidOperationException("No process path."));
         var viewModel = new MainViewModel(_monitor, store, settings, sony, startup, _logger);
 
@@ -110,6 +111,7 @@ public partial class App : Application
         finally
         {
             _instance?.Dispose();
+            AppLog.File.Dispose();
             base.OnExit(e);
         }
     }
