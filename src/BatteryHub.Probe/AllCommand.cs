@@ -1,6 +1,7 @@
 using BatteryHub.Core;
 using BatteryHub.Core.Ble;
 using BatteryHub.Core.BluetoothProperty;
+using BatteryHub.Core.Settings;
 using BatteryHub.Core.Sony;
 using BatteryHub.Core.XInput;
 
@@ -11,17 +12,32 @@ internal static class AllCommand
 {
     public static int Run(string[] args)
     {
-        if (args.Length > 0)
+        bool noSwitch = false;
+        foreach (string arg in args)
         {
-            throw new UsageException($"Unknown option '{args[0]}'.");
+            if (arg == "--no-switch")
+            {
+                noSwitch = true;
+            }
+            else
+            {
+                throw new UsageException($"Unknown option '{arg}'.");
+            }
         }
 
         Program.PrintHeader();
 
+        // Follow the tray's "Read Bluetooth PlayStation controllers" setting, so the list matches the tray.
+        bool requestFullReports = !noSwitch
+            && new SettingsStore(SettingsStore.DefaultDirectory, new ProbeLogger<SettingsStore>()).Load().ReadBluetoothPlayStationControllers;
+        Console.WriteLine(requestFullReports
+            ? "Bluetooth PlayStation pads: switched to full reports, as the tray setting says (--no-switch to skip)."
+            : "Bluetooth PlayStation pads: left in their current report mode (tray setting off, or --no-switch).");
+
         // Same readers and order as the app (the order settles ties between equally good readings).
         IBatteryProvider[] providers =
         [
-            new SonyHidProvider(logger: new ProbeLogger<SonyHidProvider>()),
+            new SonyHidProvider(new SonyHidOptions { RequestFullBluetoothReports = requestFullReports }, new ProbeLogger<SonyHidProvider>()),
             new XInputProvider(new ProbeLogger<XInputProvider>()),
             new BleBatteryProvider(new ProbeLogger<BleBatteryProvider>()),
             new BluetoothPropertyProvider(),

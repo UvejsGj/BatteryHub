@@ -17,7 +17,8 @@ internal interface IXInputSource
 /// <summary>
 /// Xbox controllers through XInput. XInput reports one of four levels, which are shown by name, never as a percentage.
 /// It gives no address, so readings are keyed by user index (slot 1-4), which can change when pads reconnect.
-/// Pads on Bluetooth and Steam's virtual pad are left to the readers that show them better.
+/// Pads on Bluetooth LE and Steam's virtual pad are left to the readers that show them better; pads on classic
+/// Bluetooth show "no data", because XInput's battery data for them is unreliable.
 /// </summary>
 public sealed class XInputProvider : IBatteryProvider
 {
@@ -26,6 +27,7 @@ public sealed class XInputProvider : IBatteryProvider
     private readonly IXInputSource _source;
     private readonly ILogger _logger;
     private readonly TimeProvider _time;
+    private readonly Slot[] _slots = new Slot[XInputConstants.MaxUsers]; // under lock (_slots)
     private bool _unavailableLogged;
 
     public XInputProvider(ILogger<XInputProvider>? logger = null, TimeProvider? time = null)
@@ -54,41 +56,92 @@ public sealed class XInputProvider : IBatteryProvider
     public Task<IReadOnlyList<BatteryReading>> PollAsync(CancellationToken cancellationToken)
     {
         var readings = new List<BatteryReading>();
-        try
+        lock (_slots)
         {
-            for (int user = 0; user < XInputConstants.MaxUsers; user++)
+            try
             {
-                if (_source.GetGamepadBattery(user) is not { } battery || _source.GetHardware(user) is { IsCoveredElsewhere: true })
+                for (int user = 0; user < XInputConstants.MaxUsers; user++)
                 {
-                    continue;
-                }
-
-                if (battery.ShownLevel is { } level)
-                {
-                    readings.Add(Reading(user) with { CoarseLevel = level });
-                }
-                else if (battery.AwaitingData)
-                {
-                    readings.Add(Reading(user) with
+                    if (Read(user) is { } reading)
                     {
-                        Status = ReadingStatus.NoData,
-                        StatusDetail = "Waiting for the controller to report its battery",
-                    });
+                        readings.Add(reading);
+                    }
                 }
             }
-        }
-        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
-        {
-            // xinput1_4.dll ships with Windows 8 and later; without it there is simply nothing to show.
-            if (!_unavailableLogged)
+            catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
             {
-                _logger.LogInformation(ex, "XInput is not available");
-                _unavailableLogged = true;
+                // xinput1_4.dll ships with Windows 8 and later; without it there is simply nothing to show.
+                if (!_unavailableLogged)
+                {
+                    _logger.LogInformation(ex, "XInput is not available");
+                    _unavailableLogged = true;
+                }
             }
         }
 
         return Task.FromResult<IReadOnlyList<BatteryReading>>(readings);
     }
+
+    private BatteryReading? Read(int user)
+    {
+        if (_source.GetGamepadBattery(user) is not { } battery)
+        {
+            _slots[user] = default; // empty slot: the next pad here starts afresh
+            return null;
+        }
+
+        var hardware = _source.GetHardware(user);
+        if (hardware is { IsCoveredElsewhere: true })
+        {
+            _slots[user] = default;
+            return null;
+        }
+
+        if (hardware is { IsClassicBluetooth: true })
+        {
+            _slots[user] = default;
+            return Reading(user) with
+            {
+                Connection = ConnectionType.Bluetooth,
+                Status = ReadingStatus.NoData,
+                StatusDetail = "Windows gives no reliable battery level for Xbox controllers on classic Bluetooth",
+            };
+        }
+
+        if (battery.ShownLevel is not { } level)
+        {
+            _slots[user] = default;
+            return battery.AwaitingData ? Waiting(user) : null;
+        }
+
+        if (level == CoarseLevel.Empty && !EmptyConfirmed(ref _slots[user]))
+        {
+            return Waiting(user);
+        }
+
+        _slots[user] = new Slot(LevelTrusted: true, FirstEmptyAt: null);
+        return Reading(user) with { CoarseLevel = level };
+    }
+
+    // Some pads report EMPTY right after connecting, before their real level arrives (XBatteryStatus treats it as
+    // "not reported yet"). An EMPTY counts once the pad has reported another level, or EMPTY has held for a while.
+    private bool EmptyConfirmed(ref Slot slot)
+    {
+        if (slot.LevelTrusted)
+        {
+            return true;
+        }
+
+        var now = _time.GetUtcNow();
+        slot = slot with { FirstEmptyAt = slot.FirstEmptyAt ?? now };
+        return now - slot.FirstEmptyAt >= XInputConstants.EmptyConfirmDelay;
+    }
+
+    private BatteryReading Waiting(int user) => Reading(user) with
+    {
+        Status = ReadingStatus.NoData,
+        StatusDetail = "Waiting for the controller to report its battery",
+    };
 
     public void Dispose()
     {
@@ -103,7 +156,13 @@ public sealed class XInputProvider : IBatteryProvider
         Timestamp = _time.GetUtcNow(),
         Source = ProviderName,
     };
+
+    /// <summary>What the reader remembers about the pad in one slot while it stays connected.</summary>
+    private readonly record struct Slot(bool LevelTrusted, DateTimeOffset? FirstEmptyAt);
 }
+
+/// <summary>XInputGetCapabilitiesEx's answer for one slot, as the Probe prints it.</summary>
+internal readonly record struct XInputCapabilitiesDump(uint Result, byte Type, byte SubType, ushort Flags, ushort VendorId, ushort ProductId, ushort Version);
 
 internal sealed unsafe partial class XInputNative : IXInputSource
 {
@@ -135,6 +194,22 @@ internal sealed unsafe partial class XInputNative : IXInputSource
         CapabilitiesEx caps = default;
         uint result = GetCapabilitiesEx(1, (uint)userIndex, 0, &caps);
         return result == XInputConstants.ErrorSuccess ? new XInputHardware(caps.VendorId, caps.ProductId) : null;
+    }
+
+    /// <summary>For the Probe: whether xinput1_4.dll exports XInputGetCapabilitiesEx on this Windows build.</summary>
+    public static bool CapabilitiesExAvailable => GetCapabilitiesEx != null;
+
+    /// <summary>For the Probe: XInputGetCapabilitiesEx's raw answer for a slot, or null when it is not exported.</summary>
+    public static XInputCapabilitiesDump? QueryCapabilities(int userIndex)
+    {
+        if (GetCapabilitiesEx == null)
+        {
+            return null;
+        }
+
+        CapabilitiesEx caps = default;
+        uint result = GetCapabilitiesEx(1, (uint)userIndex, 0, &caps);
+        return new XInputCapabilitiesDump(result, caps.Type, caps.SubType, caps.Flags, caps.VendorId, caps.ProductId, caps.ProductVersion);
     }
 
     private static delegate* unmanaged[Stdcall]<uint, uint, uint, CapabilitiesEx*, uint> ResolveCapabilitiesEx()

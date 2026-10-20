@@ -78,9 +78,40 @@ public class ReadingDeduplicatorTests
     [InlineData("a0:ab:51:c0:ff:ee:01")]
     [InlineData("g0:ab:51:c0:ff:ee")]
     [InlineData("+0ab51c0ffee")]
+    [InlineData("00:00:00:00:00:00")] // the PC's own services
+    [InlineData("FFFFFFFFFFFF")] // broadcast, names no device
     public void Rejects_anything_that_is_not_a_bluetooth_address(string? text)
     {
         Assert.False(BluetoothAddress.TryParse(text, out _));
+    }
+
+    private static readonly Guid Headset = Guid.Parse("3f2504e0-4f89-11d3-9a0c-0305e82c3301");
+
+    [Fact]
+    public void A_dual_mode_device_is_keyed_by_its_classic_address()
+    {
+        (ulong, Guid?)[] classic = [(0x111111111111, Guid.NewGuid()), (0xA0AB51C0FFEE, Headset)];
+
+        Assert.Equal(0xA0AB51C0FFEEUL, BluetoothIdentity.ClassicAddressInContainer(Headset, classic));
+    }
+
+    [Fact]
+    public void Without_one_classic_device_in_the_container_there_is_no_classic_address()
+    {
+        Assert.Null(BluetoothIdentity.ClassicAddressInContainer(Headset, [(0x111111111111, Guid.NewGuid()), (0x222222222222, null)]));
+        Assert.Null(BluetoothIdentity.ClassicAddressInContainer(Headset, [(0x111111111111, Headset), (0x222222222222, Headset)]));
+        Assert.Null(BluetoothIdentity.ClassicAddressInContainer(null, [(0x111111111111, null)]));
+        Assert.Equal(0x111111111111UL, BluetoothIdentity.ClassicAddressInContainer(Headset, [(0x111111111111, Headset), (0x111111111111, Headset)]));
+    }
+
+    [Theory]
+    [InlineData("00000000-0000-0000-0000-000000000000")]
+    [InlineData("00000000-0000-0000-ffff-ffffffffffff")] // the PC's own container
+    public void Containers_that_name_no_device_are_never_joined(string container)
+    {
+        var id = Guid.Parse(container);
+
+        Assert.Null(BluetoothIdentity.ClassicAddressInContainer(id, [(0x111111111111, id)]));
     }
 
     [Fact]

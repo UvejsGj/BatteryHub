@@ -1,4 +1,3 @@
-using System.Globalization;
 using BatteryHub.Core.Windows;
 
 namespace BatteryHub.Core.BluetoothProperty;
@@ -53,14 +52,11 @@ internal static class BluetoothNodeId
         return TryParseAddress(digits, out address);
     }
 
-    /// <summary>12 hex digits, not all zero.</summary>
+    /// <summary>Exactly 12 hex digits naming a device (see <see cref="BluetoothAddress.TryParse"/>).</summary>
     public static bool TryParseAddress(string? digits, out ulong address)
     {
         address = 0;
-        return digits is { Length: 12 }
-            && digits.All(char.IsAsciiHexDigit)
-            && ulong.TryParse(digits, NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out address)
-            && address != 0;
+        return digits is { Length: 12 } && BluetoothAddress.TryParse(digits, out address);
     }
 
     /// <summary>

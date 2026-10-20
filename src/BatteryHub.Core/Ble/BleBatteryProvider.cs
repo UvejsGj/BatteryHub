@@ -162,7 +162,7 @@ public sealed class BleBatteryProvider : IBatteryProvider
 
     private BatteryReading ReadingFor(BleDeviceInfo device, int percent) => new()
     {
-        DeviceId = DeviceIds.Bluetooth(device.Address),
+        DeviceId = DeviceIds.Bluetooth(device.ClassicAddress ?? device.Address),
         Name = device.Name,
         Kind = BleBattery.KindFromAppearance(device.Appearance),
         Connection = ConnectionType.Ble,

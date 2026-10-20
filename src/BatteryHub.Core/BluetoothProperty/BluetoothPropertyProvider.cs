@@ -53,7 +53,7 @@ public sealed class BluetoothPropertyProvider : IBatteryProvider
     {
         var inspections = await InspectAsync(cancellationToken).ConfigureAwait(false);
 
-        // A dual-mode device can have a classic and an LE node with the same address.
+        // One device can yield two readings with the same ID: a dual-mode device's hands-free and LE nodes.
         return ReadingDeduplicator.Merge(inspections
             .Select(i => i.Reading)
             .OfType<BatteryReading>()
@@ -71,22 +71,26 @@ public sealed class BluetoothPropertyProvider : IBatteryProvider
         }
 
         var endpoints = await _source.ListPairedAsync(cancellationToken).ConfigureAwait(false);
+        var classic = endpoints.Where(e => !e.IsLowEnergy).Select(e => (e.Address, e.ContainerId)).ToList();
         var now = _time.GetUtcNow();
-        return nodes.Select(node => Inspect(node, Match(node, endpoints), now)).ToList();
+        return nodes.Select(node => Inspect(node, Match(node, endpoints), classic, now)).ToList();
     }
 
     public void Dispose() => _disposed = true;
 
-    /// <summary>The paired device a node belongs to: same transport, same address, else the same container.</summary>
-    internal static BluetoothEndpoint? Match(BluetoothBatteryNode node, IReadOnlyList<BluetoothEndpoint> endpoints)
-    {
-        bool lowEnergy = node.Kind == BluetoothNodeKind.LowEnergy;
-        var sameTransport = endpoints.Where(e => e.IsLowEnergy == lowEnergy).ToList();
-        return sameTransport.FirstOrDefault(e => e.Address == node.Address)
-            ?? (node.ContainerId is { } container ? sameTransport.FirstOrDefault(e => e.ContainerId == container) : null);
-    }
+    /// <summary>The paired device a node belongs to: same transport, same address.</summary>
+    /// <remarks>
+    /// Never matched by container alone: the connection state would then be another node's (e.g. the other earbud's),
+    /// and a level Windows kept after a disconnect would show as current.
+    /// </remarks>
+    internal static BluetoothEndpoint? Match(BluetoothBatteryNode node, IReadOnlyList<BluetoothEndpoint> endpoints) =>
+        endpoints.FirstOrDefault(e => e.IsLowEnergy == (node.Kind == BluetoothNodeKind.LowEnergy) && e.Address == node.Address);
 
-    private static BluetoothPropertyInspection Inspect(BluetoothBatteryNode node, BluetoothEndpoint? endpoint, DateTimeOffset now)
+    private static BluetoothPropertyInspection Inspect(
+        BluetoothBatteryNode node,
+        BluetoothEndpoint? endpoint,
+        IReadOnlyList<(ulong Address, Guid? Container)> classic,
+        DateTimeOffset now)
     {
         if (endpoint is null)
         {
@@ -98,9 +102,13 @@ public sealed class BluetoothPropertyProvider : IBatteryProvider
             return new(node, endpoint, null, "not connected; Windows keeps the last level after a disconnect, so it is not shown");
         }
 
+        // An LE node of a dual-mode device is keyed by the device's classic address, as the other readers key it.
+        ulong idAddress = node.Kind == BluetoothNodeKind.LowEnergy
+            ? BluetoothIdentity.ClassicAddressInContainer(endpoint.ContainerId ?? node.ContainerId, classic) ?? node.Address
+            : node.Address;
         var reading = new BatteryReading
         {
-            DeviceId = DeviceIds.Bluetooth(node.Address),
+            DeviceId = DeviceIds.Bluetooth(idAddress),
             Name = NameFor(node, endpoint),
             Kind = node.Kind == BluetoothNodeKind.HandsFree ? DeviceKind.Headset : Ble.BleBattery.KindFromAppearance(endpoint.Appearance),
             Connection = node.Kind == BluetoothNodeKind.HandsFree ? ConnectionType.Bluetooth : ConnectionType.Ble,

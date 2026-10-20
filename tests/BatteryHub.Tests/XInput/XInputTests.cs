@@ -39,10 +39,12 @@ public class XInputTests
     {
         public Exception? Error { get; init; }
 
+        public XInputBattery?[] Slots { get; set; } = slots;
+
         public Dictionary<int, XInputHardware> Hardware { get; } = [];
 
         public XInputBattery? GetGamepadBattery(int userIndex) =>
-            Error is not null ? throw Error : userIndex < slots.Length ? slots[userIndex] : null;
+            Error is not null ? throw Error : userIndex < Slots.Length ? Slots[userIndex] : null;
 
         public XInputHardware? GetHardware(int userIndex) => Hardware.TryGetValue(userIndex, out var hardware) ? hardware : null;
     }
@@ -77,7 +79,9 @@ public class XInputTests
 
     [Theory]
     [InlineData(0x045E, 0x0B13)] // Xbox Series pad on Bluetooth LE
-    [InlineData(0x045E, 0x02FD)] // Xbox One S pad on Bluetooth
+    [InlineData(0x045E, 0x0B20)] // Xbox One S pad on Bluetooth LE
+    [InlineData(0x045E, 0x0B21)] // Adaptive controller on Bluetooth LE
+    [InlineData(0x045E, 0x0B22)] // Elite 2 on Bluetooth LE
     [InlineData(0x28DE, 0x11FF)] // Steam Input virtual gamepad
     public async Task Pads_shown_better_by_another_reader_are_skipped(int vendor, int product)
     {
@@ -91,12 +95,81 @@ public class XInputTests
     }
 
     [Theory]
+    [InlineData(0x02E0)] // Xbox One S, first revision
+    [InlineData(0x02FD)] // Xbox One S
+    [InlineData(0x0B05)] // Elite 2
+    [InlineData(0x0B0C)] // Adaptive controller
+    public async Task Pads_on_classic_bluetooth_show_no_data_instead_of_an_unreliable_level(int product)
+    {
+        var source = new FakeSource(new XInputBattery(0x02, 0x00));
+        source.Hardware[0] = new XInputHardware(0x045E, (ushort)product);
+        using var provider = new XInputProvider(source);
+
+        var reading = Assert.Single(await provider.PollAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(("xinput-1", ReadingStatus.NoData, (CoarseLevel?)null, ConnectionType.Bluetooth),
+            (reading.DeviceId, reading.Status, reading.CoarseLevel, reading.Connection));
+        Assert.Contains("classic Bluetooth", reading.StatusDetail);
+    }
+
+    [Theory]
     [InlineData(0x045E, 0x02FF)] // Xbox pad through the wireless adapter (XBOXGIP driver)
     [InlineData(0x045E, 0x0B12)] // Xbox Series pad on USB or the adapter
+    [InlineData(0x045E, 0x0000)] // wireless Xbox 360 pad (reports product 0)
+    [InlineData(0x0E6F, 0x02FD)] // another vendor with a product ID that matches a Microsoft one
     [InlineData(0x28DE, 0x1102)] // another Valve product
     public void Other_hardware_is_kept(int vendor, int product)
     {
-        Assert.False(new XInputHardware((ushort)vendor, (ushort)product).IsCoveredElsewhere);
+        var hardware = new XInputHardware((ushort)vendor, (ushort)product);
+        Assert.False(hardware.IsCoveredElsewhere);
+        Assert.False(hardware.IsClassicBluetooth);
+    }
+
+    [Fact]
+    public async Task A_first_empty_waits_until_it_holds()
+    {
+        var time = new FakeTimeProvider(new DateTimeOffset(2026, 10, 7, 12, 0, 0, TimeSpan.Zero));
+        var source = new FakeSource(new XInputBattery(0x02, 0x00));
+        using var provider = new XInputProvider(source, time: time);
+        var ct = TestContext.Current.CancellationToken;
+
+        Assert.Equal(ReadingStatus.NoData, Assert.Single(await provider.PollAsync(ct)).Status);
+        time.Advance(TimeSpan.FromSeconds(9));
+        Assert.Equal(ReadingStatus.NoData, Assert.Single(await provider.PollAsync(ct)).Status);
+        time.Advance(TimeSpan.FromSeconds(1));
+        Assert.Equal(CoarseLevel.Empty, Assert.Single(await provider.PollAsync(ct)).CoarseLevel);
+    }
+
+    [Fact]
+    public async Task Empty_after_a_real_level_shows_at_once()
+    {
+        var source = new FakeSource(new XInputBattery(0x02, 0x01));
+        using var provider = new XInputProvider(source);
+        var ct = TestContext.Current.CancellationToken;
+        Assert.Equal(CoarseLevel.Low, Assert.Single(await provider.PollAsync(ct)).CoarseLevel);
+
+        source.Slots = [new XInputBattery(0x02, 0x00)];
+
+        Assert.Equal(CoarseLevel.Empty, Assert.Single(await provider.PollAsync(ct)).CoarseLevel);
+    }
+
+    [Theory]
+    [InlineData(false)] // the pad left the slot
+    [InlineData(true)] // the slot reported "no data yet" again, e.g. after a reconnect
+    public async Task A_new_pad_in_the_slot_starts_afresh(bool awaitingData)
+    {
+        var time = new FakeTimeProvider(new DateTimeOffset(2026, 10, 7, 12, 0, 0, TimeSpan.Zero));
+        var source = new FakeSource(new XInputBattery(0x02, 0x02));
+        using var provider = new XInputProvider(source, time: time);
+        var ct = TestContext.Current.CancellationToken;
+        await provider.PollAsync(ct);
+
+        source.Slots = [awaitingData ? new XInputBattery(0x00, 0x00) : null];
+        await provider.PollAsync(ct);
+        source.Slots = [new XInputBattery(0x02, 0x00)];
+        time.Advance(TimeSpan.FromSeconds(30));
+
+        Assert.Equal(ReadingStatus.NoData, Assert.Single(await provider.PollAsync(ct)).Status);
     }
 
     [Fact]

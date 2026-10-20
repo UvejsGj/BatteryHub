@@ -117,17 +117,42 @@ public class BluetoothPropertyProviderTests
     }
 
     [Fact]
-    public async Task Falls_back_to_the_container_when_the_addresses_differ()
+    public async Task Never_uses_another_nodes_connection_state()
     {
+        // E.g. a second earbud whose node has no endpoint of its own: its stored level may be months old.
         var container = Guid.Parse("3f2504e0-4f89-11d3-9a0c-0305e82c3301");
         _source.Nodes.Add(LowEnergyNode(64, address: 0x5A5A5A5A5A5A, container: container));
-        _source.Endpoints.Add(Le(connected: true, container: Guid.NewGuid()));
         _source.Endpoints.Add(Le(connected: true, address: 0x6B6B6B6B6B6B, container: container));
         using var provider = Provider();
 
+        Assert.Empty(await provider.PollAsync(Ct));
+    }
+
+    [Fact]
+    public async Task An_le_node_of_a_dual_mode_device_is_keyed_by_its_classic_address()
+    {
+        var container = Guid.Parse("3f2504e0-4f89-11d3-9a0c-0305e82c3301");
+        _source.Nodes.Add(HandsFreeNode(null, container: container));
+        _source.Nodes.Add(LowEnergyNode(64, container: container));
+        _source.Endpoints.Add(Classic(connected: true, container: container));
+        _source.Endpoints.Add(Le(connected: true, container: container));
+        using var provider = Provider();
+
+        // The hands-free node's "no data" and the LE node's level are one device: one row, with the level.
         var reading = Assert.Single(await provider.PollAsync(Ct));
 
-        Assert.Equal(("bt-5a5a5a5a5a5a", (int?)64), (reading.DeviceId, reading.Percent));
+        Assert.Equal(("bt-a0ab51c0ffee", (int?)64), (reading.DeviceId, reading.Percent));
+    }
+
+    [Fact]
+    public async Task An_le_only_device_keeps_its_own_address()
+    {
+        _source.Nodes.Add(LowEnergyNode(64, container: Guid.NewGuid()));
+        _source.Endpoints.Add(Classic(connected: true, container: Guid.NewGuid()));
+        _source.Endpoints.Add(Le(connected: true));
+        using var provider = Provider();
+
+        Assert.Equal("bt-c0ffee123456", Assert.Single(await provider.PollAsync(Ct)).DeviceId);
     }
 
     [Fact]

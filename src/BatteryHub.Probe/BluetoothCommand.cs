@@ -1,6 +1,8 @@
 using BatteryHub.Core;
 using BatteryHub.Core.BluetoothProperty;
 using BatteryHub.Core.Windows;
+using Windows.Devices.Bluetooth;
+using Windows.Devices.Enumeration;
 
 namespace BatteryHub.Probe;
 
@@ -25,6 +27,21 @@ internal static class BluetoothCommand
         ("{83DA6326} 15", BluetoothPropertyConstants.UndocumentedConnected),
     ];
 
+    // As the readers request them, plus the address type, to see the raw values before BatteryHub parses them.
+    private static readonly string[] EndpointProperties =
+    [
+        "System.Devices.Aep.DeviceAddress",
+        "System.Devices.Aep.IsConnected",
+        "System.Devices.Aep.ContainerId",
+    ];
+
+    private static readonly string[] LowEnergyEndpointProperties =
+    [
+        .. EndpointProperties,
+        "System.Devices.Aep.Bluetooth.Le.Appearance",
+        "System.Devices.Aep.Bluetooth.Le.AddressType",
+    ];
+
     public static int Run(string[] args)
     {
         bool all = false;
@@ -42,8 +59,12 @@ internal static class BluetoothCommand
 
         Program.PrintHeader();
 
+        PrintRawEndpoints("classic", BluetoothDevice.GetDeviceSelectorFromPairingState(true), EndpointProperties);
+        PrintRawEndpoints("LE", BluetoothLEDevice.GetDeviceSelectorFromPairingState(true), LowEnergyEndpointProperties);
+
         var endpoints = new WindowsBluetoothPropertySource().ListPairedAsync(CancellationToken.None).GetAwaiter().GetResult();
-        Console.WriteLine($"Paired Bluetooth devices (Windows' records; no scan, no connection): {endpoints.Count}");
+        Console.WriteLine();
+        Console.WriteLine($"Paired Bluetooth devices as the reader parsed them: {endpoints.Count}");
         foreach (var e in endpoints)
         {
             Console.WriteLine($"  {DeviceIds.Bluetooth(e.Address)}  {(e.IsLowEnergy ? "LE     " : "classic")}  {(e.IsConnected ? "connected   " : "disconnected")}  container {e.ContainerId?.ToString() ?? "-"}  {e.Name}");
@@ -62,7 +83,7 @@ internal static class BluetoothCommand
             Console.WriteLine($"   name      : {i.Node.FriendlyName ?? "-"}");
             Console.WriteLine($"   container : {i.Node.ContainerId?.ToString() ?? "-"}");
             Console.WriteLine($"   stored    : {i.Node.BatteryRaw}{(i.Node.Percent is { } p ? $" -> {p}%" : "")}");
-            Console.WriteLine($"   device    : {(i.Endpoint is { } e ? $"{e.Name} ({(e.IsConnected ? "connected" : "disconnected")})" : "no paired device matched")}");
+            Console.WriteLine($"   device    : {(i.Endpoint is { } e ? $"{e.Name} ({(e.IsConnected ? "connected" : "disconnected")})" : "no paired device at this address" + ContainerMates(i.Node, endpoints))}");
             if (i.Note is { } note)
             {
                 Console.WriteLine($"   note      : {note}");
@@ -102,6 +123,40 @@ internal static class BluetoothCommand
         Console.WriteLine("Readings the app would show:");
         Readings.Print(Console.Out, provider.PollAsync(CancellationToken.None).GetAwaiter().GetResult());
         return 0;
+    }
+
+    // Windows' paired-device records (association endpoints), exactly as WinRT returns them. Reads no device.
+    private static void PrintRawEndpoints(string label, string selector, string[] properties)
+    {
+        Console.WriteLine();
+        Console.WriteLine($"Paired {label} endpoints (no scan, no connection). Query: {selector}");
+        var found = DeviceInformation.FindAllAsync(selector, properties, DeviceInformationKind.AssociationEndpoint).AsTask().GetAwaiter().GetResult();
+        foreach (var info in found)
+        {
+            Console.WriteLine($"  {info.Name}");
+            Console.WriteLine($"     id: {info.Id}");
+            foreach (string property in properties)
+            {
+                string value = info.Properties.TryGetValue(property, out object? raw)
+                    ? raw is null ? "null" : $"{raw} ({raw.GetType().Name})"
+                    : "absent";
+                Console.WriteLine($"     {property["System.Devices.Aep.".Length..]}: {value}");
+            }
+        }
+
+        if (found.Count == 0)
+        {
+            Console.WriteLine("  (none)");
+        }
+    }
+
+    // Not used to match (another node's connection state says nothing about this one), but worth seeing on hardware.
+    private static string ContainerMates(BluetoothBatteryNode node, IReadOnlyList<BluetoothEndpoint> endpoints)
+    {
+        var mates = endpoints.Where(e => node.ContainerId is { } id && e.ContainerId == id).ToList();
+        return mates.Count == 0
+            ? ""
+            : "; same container as " + string.Join(", ", mates.Select(e => $"{e.Name} {DeviceIds.Bluetooth(e.Address)} ({(e.IsLowEnergy ? "LE" : "classic")}, {(e.IsConnected ? "connected" : "disconnected")})"));
     }
 
     private static bool IsInteresting(string instanceId) =>

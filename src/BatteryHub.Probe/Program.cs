@@ -23,7 +23,9 @@ internal static class Program
                                           (hands-free) and LE devices, paired devices with their
                                           connection state, and the raw device nodes. --all dumps
                                           every Bluetooth device node.
-          all                             Every reader once, then the merged list the tray shows.
+          all [--no-switch]               Every reader once, then the merged list the tray shows.
+                                          Bluetooth PlayStation pads are switched to full reports
+                                          if the tray's setting allows it; --no-switch never does.
         """;
 
     private static int Main(string[] args)

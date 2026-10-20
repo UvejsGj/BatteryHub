@@ -73,7 +73,7 @@ internal sealed class WindowsBluetoothPropertySource : IBluetoothPropertySource
 
         // The address property is documented; the instance ID layout is not, so it is only the fallback.
         string? addressText = DeviceNodes.Read(node, BluetoothPropertyConstants.DeviceAddress).AsString();
-        if (!(BluetoothAddress.TryParse(addressText, out ulong address) && address != 0)
+        if (!BluetoothAddress.TryParse(addressText, out ulong address)
             && !BluetoothNodeId.TryGetAddress(instanceId, out address))
         {
             return null;

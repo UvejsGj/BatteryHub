@@ -32,6 +32,16 @@ public class BleBatteryProviderTests
     }
 
     [Fact]
+    public async Task A_dual_mode_device_is_keyed_by_its_classic_address()
+    {
+        _source.Devices.Add(Device("buds", 0x5A5A5A5A5A5A) with { ClassicAddress = 0xA0AB51C0FFEE });
+        _source.SetRead("buds", Plain55);
+        using var provider = Provider();
+
+        Assert.Equal("bt-a0ab51c0ffee", Assert.Single(await provider.PollAsync(Ct)).DeviceId);
+    }
+
+    [Fact]
     public async Task Never_reads_a_device_that_is_not_connected()
     {
         _source.Devices.Add(Device("off", 1, connected: false));

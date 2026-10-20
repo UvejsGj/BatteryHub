@@ -27,10 +27,14 @@ public readonly record struct XInputBattery(byte Type, byte Level)
 public readonly record struct XInputHardware(ushort VendorId, ushort ProductId)
 {
     /// <summary>
-    /// True for pads another reader shows better: Xbox controllers on Bluetooth (the Bluetooth readers give a
+    /// True for pads another reader shows better: Xbox controllers on Bluetooth LE (the Bluetooth readers give a
     /// percentage) and Steam Input's virtual gamepad (it mirrors a real pad).
     /// </summary>
     public bool IsCoveredElsewhere =>
-        (VendorId == XInputConstants.MicrosoftVendorId && XInputConstants.BluetoothOnlyProductIds.Contains(ProductId))
+        (VendorId == XInputConstants.MicrosoftVendorId && XInputConstants.BluetoothLowEnergyProductIds.Contains(ProductId))
         || (VendorId == XInputConstants.ValveVendorId && ProductId == XInputConstants.SteamVirtualGamepadProductId);
+
+    /// <summary>An Xbox controller on classic Bluetooth, whose XInput battery data is unreliable.</summary>
+    public bool IsClassicBluetooth =>
+        VendorId == XInputConstants.MicrosoftVendorId && XInputConstants.ClassicBluetoothProductIds.Contains(ProductId);
 }

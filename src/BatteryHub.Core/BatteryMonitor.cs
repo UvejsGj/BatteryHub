@@ -77,10 +77,11 @@ public sealed class BatteryMonitor : IAsyncDisposable
     }
 
     /// <summary>Polls every provider now and completes once all have answered or failed.</summary>
+    /// <remarks>Each poll starts on the thread pool, so a provider that does blocking work never runs on the caller's (UI) thread.</remarks>
     public Task RefreshAsync(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        return Task.WhenAll(_providers.Select(p => PollAsync(p, cancellationToken)));
+        return Task.WhenAll(_providers.Select(p => Task.Run(() => PollAsync(p, cancellationToken), CancellationToken.None)));
     }
 
     public async ValueTask DisposeAsync()

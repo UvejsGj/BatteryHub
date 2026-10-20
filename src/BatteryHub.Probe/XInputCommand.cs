@@ -14,17 +14,22 @@ internal static class XInputCommand
         }
 
         Program.PrintHeader();
-        var native = new XInputNative();
         try
         {
+            Console.WriteLine($"XInputGetCapabilitiesEx (ordinal 108): {(XInputNative.CapabilitiesExAvailable ? "found" : "not exported; Bluetooth and Steam pads cannot be told apart")}");
             for (int user = 0; user < XInputConstants.MaxUsers; user++)
             {
                 var (result, battery) = XInputNative.QueryBattery(user);
-                var hardware = native.GetHardware(user);
-                string ids = hardware is { } h ? $"{h.VendorId:X4}:{h.ProductId:X4}{(h.IsCoveredElsewhere ? " (shown by another reader)" : "")}" : "unknown";
                 Console.WriteLine(result == XInputConstants.ErrorSuccess
-                    ? $"slot {user + 1}: type 0x{battery.Type:X2} ({TypeName(battery.Type)}), level 0x{battery.Level:X2}, hardware {ids}"
-                    : $"slot {user + 1}: {(result == XInputConstants.ErrorDeviceNotConnected ? "no pad" : $"error {result}")}");
+                    ? $"slot {user + 1}: battery type 0x{battery.Type:X2} ({TypeName(battery.Type)}), level 0x{battery.Level:X2}"
+                    : $"slot {user + 1}: battery {(result == XInputConstants.ErrorDeviceNotConnected ? "no pad" : $"error {result}")}");
+                if (XInputNative.QueryCapabilities(user) is { } caps)
+                {
+                    var hardware = new XInputHardware(caps.VendorId, caps.ProductId);
+                    Console.WriteLine(caps.Result == XInputConstants.ErrorSuccess
+                        ? $"        capabilities: {caps.VendorId:X4}:{caps.ProductId:X4} version {caps.Version:X4}, type 0x{caps.Type:X2}, subtype 0x{caps.SubType:X2}, flags 0x{caps.Flags:X4}{((caps.Flags & XInputConstants.CapsWireless) != 0 ? " (wireless)" : "")}{HardwareNote(hardware)}"
+                        : $"        capabilities: {(caps.Result == XInputConstants.ErrorDeviceNotConnected ? "no pad" : $"error {caps.Result}")}");
+                }
             }
         }
         catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
@@ -40,6 +45,11 @@ internal static class XInputCommand
         Readings.Print(Console.Out, readings);
         return 0;
     }
+
+    private static string HardwareNote(XInputHardware hardware) =>
+        hardware.IsCoveredElsewhere ? " (skipped: Bluetooth LE pad or Steam's virtual pad, shown by other readers)"
+        : hardware.IsClassicBluetooth ? " (classic Bluetooth: shown as no data)"
+        : "";
 
     private static string TypeName(byte type) => type switch
     {

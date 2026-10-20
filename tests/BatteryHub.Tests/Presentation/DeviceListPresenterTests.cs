@@ -49,6 +49,9 @@ public class DeviceListPresenterTests
     [InlineData(20, ChargeState.Discharging, true)]
     [InlineData(21, ChargeState.Discharging, false)]
     [InlineData(5, ChargeState.Charging, false)]
+    [InlineData(5, ChargeState.Full, false)]
+    [InlineData(20, ChargeState.Unknown, true)] // Bluetooth readers never know the charge state
+    [InlineData(21, ChargeState.Unknown, false)]
     public void Low_means_at_or_below_the_threshold_and_not_charging(int percent, ChargeState charge, bool low)
     {
         Assert.Equal(low, DeviceListPresenter.Row(Reading(percent, charge)).IsLow);
@@ -62,11 +65,13 @@ public class DeviceListPresenterTests
     public void Coarse_levels_show_their_own_name_and_low_ones_are_low(CoarseLevel level, string text, bool lowWhenDischarging)
     {
         var discharging = DeviceListPresenter.Row(Reading(coarse: level));
+        var unknown = DeviceListPresenter.Row(Reading(coarse: level, charge: ChargeState.Unknown)); // what XInput gives
         var charging = DeviceListPresenter.Row(Reading(coarse: level, charge: ChargeState.Charging));
 
         Assert.Equal(text, discharging.Level);
         Assert.NotNull(discharging.BarFraction);
         Assert.Equal(lowWhenDischarging, discharging.IsLow);
+        Assert.Equal(lowWhenDischarging, unknown.IsLow);
         Assert.False(charging.IsLow);
     }
 

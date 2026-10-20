@@ -3,7 +3,10 @@ namespace BatteryHub.Core.Ble;
 /// <summary>A paired Bluetooth LE device as Windows lists it.</summary>
 /// <param name="Id">Windows' device ID, used to open it.</param>
 /// <param name="Appearance">GAP Appearance value (category in the top 10 bits), when the device advertises one.</param>
-public sealed record BleDeviceInfo(string Id, string Name, ulong Address, bool IsConnected, ushort? Appearance);
+/// <param name="ClassicAddress">
+/// For a dual-mode device whose classic half has its own address, that address (readings are keyed by it).
+/// </param>
+public sealed record BleDeviceInfo(string Id, string Name, ulong Address, bool IsConnected, ushort? Appearance, ulong? ClassicAddress = null);
 
 public enum BleReadStatus
 {

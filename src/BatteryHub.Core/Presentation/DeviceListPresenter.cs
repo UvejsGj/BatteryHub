@@ -29,7 +29,7 @@ public static class DeviceListPresenter
                 details,
                 null,
                 percent / 100.0,
-                percent <= lowPercent && reading.ChargeState == ChargeState.Discharging),
+                percent <= lowPercent && !IsCharging(reading.ChargeState)),
             ReadingStatus.Ok when reading.CoarseLevel is CoarseLevel coarse => new(
                 reading.DeviceId,
                 reading.Name,
@@ -37,12 +37,16 @@ public static class DeviceListPresenter
                 details,
                 null,
                 CoarseFraction(coarse),
-                coarse <= CoarseLevel.Low && reading.ChargeState == ChargeState.Discharging),
+                coarse <= CoarseLevel.Low && !IsCharging(reading.ChargeState)),
             ReadingStatus.InUseByAnotherApp => new(reading.DeviceId, reading.Name, "In use", connection, reading.StatusDetail ?? "In use by another app", null, false),
             ReadingStatus.DeviceError => new(reading.DeviceId, reading.Name, "Fault", connection, reading.StatusDetail ?? "The device reports a battery fault", null, false),
             _ => new(reading.DeviceId, reading.Name, "No data", connection, reading.StatusDetail ?? "The device did not report its battery", null, false),
         };
     }
+
+    // Most sources (XInput, Bluetooth LE, Windows' stored level) never report a charge state, so an unknown one
+    // counts as discharging: a low level is worth flagging unless the device says it is charging.
+    private static bool IsCharging(ChargeState state) => state is ChargeState.Charging or ChargeState.Full;
 
     /// <summary>One line per device, e.g. "DualShock 4: 85% (charging)", cut to fit the tray tooltip.</summary>
     public static string ToolTip(IEnumerable<BatteryReading> readings)

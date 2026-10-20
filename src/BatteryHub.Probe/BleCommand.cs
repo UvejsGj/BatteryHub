@@ -20,7 +20,7 @@ internal static class BleCommand
         {
             Console.WriteLine();
             Console.WriteLine($"{d.Device.Name}");
-            Console.WriteLine($"   address    : {DeviceIds.Bluetooth(d.Device.Address)}");
+            Console.WriteLine($"   address    : {DeviceIds.Bluetooth(d.Device.Address)}{(d.Device.ClassicAddress is { } classic ? $" (dual-mode; keyed by its classic address {DeviceIds.Bluetooth(classic)})" : "")}");
             Console.WriteLine($"   connected  : {(d.Device.IsConnected ? "yes" : "no")}");
             Console.WriteLine($"   appearance : {(d.Device.Appearance is { } a ? $"0x{a:X4} (category 0x{a >> 6:X3}, sub 0x{a & 0x3F:X2}) -> {BleBattery.KindFromAppearance(a)}" : "none")}");
             if (d.Read is { } read)
